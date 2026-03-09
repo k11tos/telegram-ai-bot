@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 
 import httpx
@@ -16,6 +17,11 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AI_GATEWAY = os.getenv("AI_GATEWAY")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # 사용자별 대화 저장
 conversations = {}
@@ -61,10 +67,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         payload = {"prompt": prompt}
 
-        async with httpx.AsyncClient() as client:
-            r = await client.post(AI_GATEWAY, json=payload, timeout=120.0)
-            r.raise_for_status()
-            result = r.json()["response"]
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(AI_GATEWAY, json=payload, timeout=120.0)
+                r.raise_for_status()
+                result = r.json()["response"]
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error occurred: {e}")
+            await update.message.reply_text(
+                "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            )
+            # 실패 시 history 복구
+            conversations[user_id] = history[:-1]
+            return
+        except httpx.RequestError as e:
+            logger.error(f"Request error occurred: {e}")
+            await update.message.reply_text(
+                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+            conversations[user_id] = history[:-1]
+            return
+        except (ValueError, KeyError) as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            await update.message.reply_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
+            conversations[user_id] = history[:-1]
+            return
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            await update.message.reply_text("알 수 없는 오류가 발생했습니다.")
+            conversations[user_id] = history[:-1]
+            return
 
         history.append(f"AI: {result}")
         conversations[user_id] = history[-MAX_HISTORY:]
