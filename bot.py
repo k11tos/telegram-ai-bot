@@ -54,6 +54,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("응답 생성 중입니다. 잠시만 기다려주세요.")
         return
 
+    waiting_msg = await update.message.reply_text("응답 생성 중...", quote=True)
+
     async with lock:
         if user_id not in conversations:
             conversations[user_id] = []
@@ -69,39 +71,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             async with httpx.AsyncClient() as client:
-                r = await client.post(AI_GATEWAY, json=payload, timeout=120.0)
+                r = await client.post(AI_GATEWAY, json=payload, timeout=110.0)
                 r.raise_for_status()
                 result = r.json()["response"]
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error occurred: {e}")
-            await update.message.reply_text(
-                "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-            )
+            await waiting_msg.edit_text("죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
             # 실패 시 history 복구
             conversations[user_id] = history[:-1]
             return
         except httpx.RequestError as e:
             logger.error(f"Request error occurred: {e}")
-            await update.message.reply_text(
-                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
-            )
+            await waiting_msg.edit_text("죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요.")
             conversations[user_id] = history[:-1]
             return
         except (ValueError, KeyError) as e:
             logger.error(f"Failed to parse JSON response: {e}")
-            await update.message.reply_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
+            await waiting_msg.edit_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
             conversations[user_id] = history[:-1]
             return
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
-            await update.message.reply_text("알 수 없는 오류가 발생했습니다.")
+            await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
             conversations[user_id] = history[:-1]
             return
 
         history.append(f"AI: {result}")
         conversations[user_id] = history[-MAX_HISTORY:]
 
-    await update.message.reply_text(result)
+    await waiting_msg.edit_text(result)
 
 
 def main():
