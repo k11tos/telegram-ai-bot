@@ -54,7 +54,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("응답 생성 중입니다. 잠시만 기다려주세요.")
         return
 
-    waiting_msg = await update.message.reply_text("응답 생성 중...", quote=True)
+    waiting_msg = await update.message.reply_text("응답 생성 중...")
 
     async with lock:
         if user_id not in conversations:
