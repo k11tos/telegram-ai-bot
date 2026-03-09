@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import requests
@@ -18,13 +19,22 @@ AI_GATEWAY = os.getenv("AI_GATEWAY")
 
 # 사용자별 대화 저장
 conversations = {}
+user_locks = {}
 
 MAX_HISTORY = 10
 
 
+def get_user_lock(user_id):
+    if user_id not in user_locks:
+        user_locks[user_id] = asyncio.Lock()
+    return user_locks[user_id]
+
+
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    conversations[user_id] = []
+    lock = get_user_lock(user_id)
+    async with lock:
+        conversations[user_id] = []
     await update.message.reply_text("대화 기록을 초기화했습니다.")
 
 
@@ -32,25 +42,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
 
-    if user_id not in conversations:
-        conversations[user_id] = []
+    lock = get_user_lock(user_id)
 
-    history = conversations[user_id]
+    if lock.locked():
+        await update.message.reply_text("응답 생성 중입니다. 잠시만 기다려주세요.")
+        return
 
-    history.append(f"User: {user_text}")
-    history = history[-MAX_HISTORY:]
+    async with lock:
+        if user_id not in conversations:
+            conversations[user_id] = []
 
-    prompt = "\n".join(history) + "\nAI:"
+        history = conversations[user_id]
 
-    payload = {"prompt": prompt}
+        history.append(f"User: {user_text}")
+        history = history[-MAX_HISTORY:]
 
-    r = requests.post(AI_GATEWAY, json=payload, timeout=120)
-    r.raise_for_status()
+        prompt = "\n".join(history) + "\nAI:"
 
-    result = r.json()["response"]
+        payload = {"prompt": prompt}
 
-    history.append(f"AI: {result}")
-    conversations[user_id] = history[-MAX_HISTORY:]
+        loop = asyncio.get_running_loop()
+
+        def _post():
+            return requests.post(AI_GATEWAY, json=payload, timeout=120)
+
+        r = await loop.run_in_executor(None, _post)
+        r.raise_for_status()
+
+        result = r.json()["response"]
+
+        history.append(f"AI: {result}")
+        conversations[user_id] = history[-MAX_HISTORY:]
 
     await update.message.reply_text(result)
 
