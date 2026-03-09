@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-import requests
+import httpx
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -61,15 +61,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         payload = {"prompt": prompt}
 
-        loop = asyncio.get_running_loop()
-
-        def _post():
-            return requests.post(AI_GATEWAY, json=payload, timeout=120)
-
-        r = await loop.run_in_executor(None, _post)
-        r.raise_for_status()
-
-        result = r.json()["response"]
+        async with httpx.AsyncClient() as client:
+            r = await client.post(AI_GATEWAY, json=payload, timeout=120.0)
+            r.raise_for_status()
+            result = r.json()["response"]
 
         history.append(f"AI: {result}")
         conversations[user_id] = history[-MAX_HISTORY:]
