@@ -50,8 +50,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lock = get_user_lock(user_id)
 
-    waiting_msg = await update.message.reply_text("AI가 답변을 생성 중입니다...")
-
     async with lock:
         if user_id not in conversations:
             conversations[user_id] = []
@@ -60,47 +58,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
 
-        prompt = "\n".join(new_history) + "\nAI:"
-        payload = {"prompt": prompt}
+        waiting_msg = await update.message.reply_text("AI가 답변을 생성 중입니다...")
 
-        try:
-            async with httpx.AsyncClient() as client:
-                r = await client.post(AI_GATEWAY, json=payload, timeout=110.0)
-                r.raise_for_status()
-                result = r.json()["response"]
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error occurred: {e}")
-            conversations[user_id] = old_history
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.RequestError as e:
-            logger.error(f"Request error occurred: {e}")
-            conversations[user_id] = old_history
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except (ValueError, KeyError) as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            conversations[user_id] = old_history
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."
-            )
-            return
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            conversations[user_id] = old_history
-            await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
-            return
+    prompt = "\n".join(new_history) + "\nAI:"
+    payload = {"prompt": prompt}
 
-        try:
-            await waiting_msg.edit_text(result)
-        except Exception as e:
-            logger.error(f"Telegram message send failed: {e}")
-            await update.message.reply_text("AI 응답 전송 중 오류가 발생했습니다.")
-            conversations[user_id] = old_history
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(AI_GATEWAY, json=payload, timeout=110.0)
+            r.raise_for_status()
+            result = r.json()["response"]
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error occurred: {e}")
+        await waiting_msg.edit_text(
+            "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+        )
+        return
+    except httpx.RequestError as e:
+        logger.error(f"Request error occurred: {e}")
+        await waiting_msg.edit_text(
+            "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+        )
+        return
+    except (ValueError, KeyError) as e:
+        logger.error(f"Failed to parse JSON response: {e}")
+        await waiting_msg.edit_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
+        return
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
+        return
+
+    try:
+        await waiting_msg.edit_text(result)
+    except Exception as e:
+        logger.error(f"Telegram message send failed: {e}")
+        await update.message.reply_text("AI 응답 전송 중 오류가 발생했습니다.")
+        return
+
+    async with lock:
+        if conversations.get(user_id, []) != old_history:
+            logger.info("Conversation state changed during request; skipping history update.")
             return
 
         new_history.append(f"AI: {result}")
