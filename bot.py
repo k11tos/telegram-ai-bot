@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # 사용자별 대화 저장
 conversations = {}
 user_locks = {}
+user_reset_tokens = {}
 
 MAX_HISTORY = 10
 
@@ -41,6 +42,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lock = get_user_lock(user_id)
     async with lock:
         conversations[user_id] = []
+        user_reset_tokens[user_id] = user_reset_tokens.get(user_id, 0) + 1
     await update.message.reply_text("대화 기록을 초기화했습니다.")
 
 
@@ -54,8 +56,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         if user_id not in conversations:
             conversations[user_id] = []
+        if user_id not in user_reset_tokens:
+            user_reset_tokens[user_id] = 0
 
         old_history = conversations[user_id][:]
+        reset_token = user_reset_tokens[user_id]
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
 
@@ -96,8 +101,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     async with lock:
-        if conversations.get(user_id, []) != old_history:
-            logger.info("Conversation state changed during request; skipping history update.")
+        if user_reset_tokens.get(user_id, 0) != reset_token:
+            logger.info("Conversation reset detected during request; skipping stale history update.")
+            return
+
+        current_history = conversations.get(user_id, [])
+        if current_history != old_history:
+            logger.info("Conversation changed during request; appending completed turn to latest history.")
+            updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
+            conversations[user_id] = updated_history[-MAX_HISTORY:]
             return
 
         new_history.append(f"AI: {result}")
