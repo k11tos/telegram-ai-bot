@@ -50,11 +50,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lock = get_user_lock(user_id)
 
-    if lock.locked():
-        await update.message.reply_text("응답 생성 중입니다. 잠시만 기다려주세요.")
-        return
-
-    waiting_msg = await update.message.reply_text("응답 생성 중...")
+    waiting_msg = await update.message.reply_text("AI가 답변을 생성 중입니다...")
 
     async with lock:
         if user_id not in conversations:
@@ -99,10 +95,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
             return
 
+        try:
+            await waiting_msg.edit_text(result)
+        except Exception as e:
+            logger.error(f"Telegram message send failed: {e}")
+            await update.message.reply_text("AI 응답 전송 중 오류가 발생했습니다.")
+            conversations[user_id] = old_history
+            return
+
         new_history.append(f"AI: {result}")
         conversations[user_id] = new_history[-MAX_HISTORY:]
-
-    await waiting_msg.edit_text(result)
 
 
 def main():
