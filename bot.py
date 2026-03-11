@@ -118,10 +118,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             try:
                 await waiting_msg.edit_text(result)
-            except Exception as e:
-                logger.error(f"Telegram message send failed: {e}")
-                await update.message.reply_text("AI 응답 전송 중 오류가 발생했습니다.")
-                return
+            except Exception as edit_error:
+                logger.error(f"Telegram message edit failed: {edit_error}")
+                try:
+                    await update.message.reply_text(result)
+                except Exception as reply_error:
+                    logger.error(f"Telegram fallback reply failed: {reply_error}")
+                    error_summary = str(reply_error).strip() or type(reply_error).__name__
+                    if len(error_summary) > 120:
+                        error_summary = error_summary[:117] + "..."
+                    await update.message.reply_text(
+                        f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
+                    )
+                    return
 
             if user_reset_tokens.get(user_id, 0) != reset_token:
                 logger.info("Conversation reset detected during request; skipping stale history update.")
