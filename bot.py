@@ -60,13 +60,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id not in conversations:
             conversations[user_id] = []
 
-        history = conversations[user_id]
+        old_history = conversations[user_id][:]
+        new_history = old_history + [f"User: {user_text}"]
+        new_history = new_history[-MAX_HISTORY:]
 
-        history.append(f"User: {user_text}")
-        history = history[-MAX_HISTORY:]
-
-        prompt = "\n".join(history) + "\nAI:"
-
+        prompt = "\n".join(new_history) + "\nAI:"
         payload = {"prompt": prompt}
 
         try:
@@ -76,28 +74,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result = r.json()["response"]
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error occurred: {e}")
-            await waiting_msg.edit_text("죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
-            # 실패 시 history 복구
-            conversations[user_id] = history[:-1]
+            conversations[user_id] = old_history
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            )
             return
         except httpx.RequestError as e:
             logger.error(f"Request error occurred: {e}")
-            await waiting_msg.edit_text("죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요.")
-            conversations[user_id] = history[:-1]
+            conversations[user_id] = old_history
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
             return
         except (ValueError, KeyError) as e:
             logger.error(f"Failed to parse JSON response: {e}")
-            await waiting_msg.edit_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
-            conversations[user_id] = history[:-1]
+            conversations[user_id] = old_history
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."
+            )
             return
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
+            conversations[user_id] = old_history
             await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
-            conversations[user_id] = history[:-1]
             return
 
-        history.append(f"AI: {result}")
-        conversations[user_id] = history[-MAX_HISTORY:]
+        new_history.append(f"AI: {result}")
+        conversations[user_id] = new_history[-MAX_HISTORY:]
 
     await waiting_msg.edit_text(result)
 
