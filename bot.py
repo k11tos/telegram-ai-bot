@@ -17,6 +17,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AI_GATEWAY = os.getenv("AI_GATEWAY")
+TIMEOUT = float(os.getenv("TIMEOUT", "300"))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -69,7 +70,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.post(AI_GATEWAY, json=payload, timeout=110.0)
+            r = await client.post(AI_GATEWAY, json=payload, timeout=TIMEOUT)
             r.raise_for_status()
             result = r.json()["response"]
     except httpx.HTTPStatusError as e:
