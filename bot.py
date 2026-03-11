@@ -49,6 +49,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     lock = get_user_lock(user_id)
+    waiting_msg = await update.message.reply_text("AI가 답변을 생성 중입니다...")
 
     async with lock:
         if user_id not in conversations:
@@ -57,8 +58,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         old_history = conversations[user_id][:]
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
-
-        waiting_msg = await update.message.reply_text("AI가 답변을 생성 중입니다...")
 
     prompt = "\n".join(new_history) + "\nAI:"
     payload = {"prompt": prompt}
