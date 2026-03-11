@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 conversations = {}
 user_locks = {}
 user_reset_tokens = {}
+user_turn_counters = {}
+user_next_turn_to_finalize = {}
+user_finalize_conditions = {}
 
 MAX_HISTORY = 10
 
@@ -36,6 +39,13 @@ def get_user_lock(user_id):
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
     return user_locks[user_id]
+
+
+def get_user_finalize_condition(user_id):
+    lock = get_user_lock(user_id)
+    if user_id not in user_finalize_conditions:
+        user_finalize_conditions[user_id] = asyncio.Condition(lock)
+    return user_finalize_conditions[user_id]
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,9 +69,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conversations[user_id] = []
         if user_id not in user_reset_tokens:
             user_reset_tokens[user_id] = 0
+        if user_id not in user_turn_counters:
+            user_turn_counters[user_id] = 0
+        if user_id not in user_next_turn_to_finalize:
+            user_next_turn_to_finalize[user_id] = 1
 
         old_history = conversations[user_id][:]
         reset_token = user_reset_tokens[user_id]
+        user_turn_counters[user_id] += 1
+        turn_id = user_turn_counters[user_id]
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
 
@@ -94,27 +110,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
         return
 
-    try:
-        await waiting_msg.edit_text(result)
-    except Exception as e:
-        logger.error(f"Telegram message send failed: {e}")
-        await update.message.reply_text("AI 응답 전송 중 오류가 발생했습니다.")
-        return
+    finalize_condition = get_user_finalize_condition(user_id)
+    async with finalize_condition:
+        while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
+            await finalize_condition.wait()
 
-    async with lock:
-        if user_reset_tokens.get(user_id, 0) != reset_token:
-            logger.info("Conversation reset detected during request; skipping stale history update.")
-            return
+        try:
+            try:
+                await waiting_msg.edit_text(result)
+            except Exception as e:
+                logger.error(f"Telegram message send failed: {e}")
+                await update.message.reply_text("AI 응답 전송 중 오류가 발생했습니다.")
+                return
 
-        current_history = conversations.get(user_id, [])
-        if current_history != old_history:
-            logger.info("Conversation changed during request; appending completed turn to latest history.")
+            if user_reset_tokens.get(user_id, 0) != reset_token:
+                logger.info("Conversation reset detected during request; skipping stale history update.")
+                return
+
+            current_history = conversations.get(user_id, [])
             updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
             conversations[user_id] = updated_history[-MAX_HISTORY:]
-            return
-
-        new_history.append(f"AI: {result}")
-        conversations[user_id] = new_history[-MAX_HISTORY:]
+        finally:
+            user_next_turn_to_finalize[user_id] = turn_id + 1
+            finalize_condition.notify_all()
 
 
 def main():
