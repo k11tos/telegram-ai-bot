@@ -277,9 +277,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             error_summary = str(reply_error).strip() or type(reply_error).__name__
             if len(error_summary) > 120:
                 error_summary = error_summary[:117] + "..."
-            await update.message.reply_text(
-                f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
-            )
+            try:
+                await update.message.reply_text(
+                    f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
+                )
+            except Exception as notify_error:
+                logger.error(f"Telegram error-notice send failed: {notify_error}")
+            # Never let Telegram send failures skip finalization ordering.
             response_delivered = False
 
     finalize_condition = get_user_finalize_condition(user_id)
