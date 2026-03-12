@@ -161,6 +161,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lock = get_user_lock(user_id)
     waiting_msg = await update.message.reply_text("생각 중…")
 
+    # Keep the per-user lock scope minimal: only protect shared state reads/writes
+    # needed to prepare this turn. The potentially slow AI call runs without holding
+    # the lock so later messages from the same user can start in parallel.
     async with lock:
         if user_id not in conversations:
             conversations[user_id] = []
@@ -261,28 +264,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
         return
 
+    response_delivered = True
+    try:
+        final_text = fit_telegram_text(result)
+        await waiting_msg.edit_text(final_text)
+    except Exception as edit_error:
+        logger.error(f"Telegram message edit failed: {edit_error}")
+        try:
+            await update.message.reply_text(fit_telegram_text(result))
+        except Exception as reply_error:
+            logger.error(f"Telegram fallback reply failed: {reply_error}")
+            error_summary = str(reply_error).strip() or type(reply_error).__name__
+            if len(error_summary) > 120:
+                error_summary = error_summary[:117] + "..."
+            try:
+                await update.message.reply_text(
+                    f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
+                )
+            except Exception as notify_error:
+                logger.error(f"Telegram error-notice send failed: {notify_error}")
+            # Never let Telegram send failures skip finalization ordering.
+            response_delivered = False
+
     finalize_condition = get_user_finalize_condition(user_id)
+    # Reacquire the shared per-user lock only for finalization ordering and history
+    # mutation. Turn numbers still serialize this section to preserve ordering.
     async with finalize_condition:
         while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
             await finalize_condition.wait()
 
         try:
-            try:
-                final_text = fit_telegram_text(result)
-                await waiting_msg.edit_text(final_text)
-            except Exception as edit_error:
-                logger.error(f"Telegram message edit failed: {edit_error}")
-                try:
-                    await update.message.reply_text(fit_telegram_text(result))
-                except Exception as reply_error:
-                    logger.error(f"Telegram fallback reply failed: {reply_error}")
-                    error_summary = str(reply_error).strip() or type(reply_error).__name__
-                    if len(error_summary) > 120:
-                        error_summary = error_summary[:117] + "..."
-                    await update.message.reply_text(
-                        f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
-                    )
-                    return
+            if not response_delivered:
+                return
 
             if user_reset_tokens.get(user_id, 0) != reset_token:
                 logger.info("Conversation reset detected during request; skipping stale history update.")
