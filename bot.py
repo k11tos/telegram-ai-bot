@@ -190,40 +190,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     stream_result = ""
+    stream_completed_normally = False
+    stream_failed = False
     last_rendered_text = ""
     last_edit_ts = 0.0
 
     try:
-        async with client.stream("POST", AI_GATEWAY_STREAM_PATH, json=payload) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                delta, done = extract_stream_delta(line)
-                if done:
-                    break
+        try:
+            async with client.stream("POST", AI_GATEWAY_STREAM_PATH, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    delta, done = extract_stream_delta(line)
+                    if done:
+                        stream_completed_normally = True
+                        break
 
-                if not delta:
-                    continue
+                    if not delta:
+                        continue
 
-                if stream_result and delta.startswith(stream_result):
-                    stream_result = delta
-                else:
-                    stream_result += delta
-                now = time.monotonic()
+                    if stream_result and delta.startswith(stream_result):
+                        stream_result = delta
+                    else:
+                        stream_result += delta
+                    now = time.monotonic()
 
-                if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
-                    continue
+                    if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
+                        continue
 
-                draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
-                if draft_text != last_rendered_text:
-                    try:
-                        await waiting_msg.edit_text(draft_text)
-                        last_rendered_text = draft_text
-                        last_edit_ts = now
-                    except Exception as stream_edit_error:
-                        logger.warning(f"Telegram stream edit failed: {stream_edit_error}")
+                    draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
+                    if draft_text != last_rendered_text:
+                        try:
+                            await waiting_msg.edit_text(draft_text)
+                            last_rendered_text = draft_text
+                            last_edit_ts = now
+                        except Exception as stream_edit_error:
+                            logger.warning(f"Telegram stream edit failed: {stream_edit_error}")
+        except (httpx.HTTPStatusError, httpx.RequestError) as stream_error:
+            stream_failed = True
+            logger.warning(f"Streaming request failed; will fall back to /chat: {stream_error}")
 
         result = stream_result.strip()
-        if not result:
+        should_fallback = stream_failed or not result or not stream_completed_normally
+        if should_fallback:
+            if result and not stream_completed_normally:
+                logger.warning(
+                    "Discarding partial streamed output due to missing completion signal; "
+                    "falling back to /chat response"
+                )
             fallback_resp = await client.post(AI_GATEWAY_CHAT_PATH, json=payload)
             fallback_resp.raise_for_status()
             result = fallback_resp.json()["response"]
