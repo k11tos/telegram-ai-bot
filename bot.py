@@ -22,7 +22,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEOUT = float(os.getenv("TIMEOUT", "300"))
 AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
-AI_GATEWAY_PATH = "/generate"
+AI_GATEWAY_CHAT_PATH = "/chat"
 AI_GATEWAY_STREAM_PATH = "/generate_stream"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
@@ -224,7 +224,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         result = stream_result.strip()
         if not result:
-            fallback_resp = await client.post(AI_GATEWAY_PATH, json=payload)
+            fallback_resp = await client.post(AI_GATEWAY_CHAT_PATH, json=payload)
             fallback_resp.raise_for_status()
             result = fallback_resp.json()["response"]
     except httpx.HTTPStatusError as e:
