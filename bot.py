@@ -16,8 +16,11 @@ from telegram.ext import (
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-AI_GATEWAY = os.getenv("AI_GATEWAY")
 TIMEOUT = float(os.getenv("TIMEOUT", "300"))
+AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
+AI_GATEWAY_PATH = "/generate"
+MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
+MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -33,6 +36,7 @@ user_next_turn_to_finalize = {}
 user_finalize_conditions = {}
 
 MAX_HISTORY = 10
+HTTP_CLIENT_KEY = "http_client"
 
 
 def get_user_lock(user_id):
@@ -83,12 +87,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prompt = "\n".join(new_history) + "\nAI:"
     payload = {"prompt": prompt}
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+
+    if client is None:
+        logger.error("Shared HTTP client is not initialized")
+        await waiting_msg.edit_text(
+            "죄송합니다. AI 서버 연결이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
+        )
+        return
 
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(AI_GATEWAY, json=payload, timeout=TIMEOUT)
-            r.raise_for_status()
-            result = r.json()["response"]
+        r = await client.post(AI_GATEWAY_PATH, json=payload)
+        r.raise_for_status()
+        result = r.json()["response"]
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error occurred: {e}")
         await waiting_msg.edit_text(
@@ -144,13 +155,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             finalize_condition.notify_all()
 
 
+async def init_http_client(app):
+    timeout = httpx.Timeout(TIMEOUT)
+    limits = httpx.Limits(
+        max_keepalive_connections=MAX_KEEPALIVE_CONNECTIONS,
+        max_connections=MAX_CONNECTIONS,
+    )
+    app.bot_data[HTTP_CLIENT_KEY] = httpx.AsyncClient(
+        base_url=AI_GATEWAY_BASE_URL,
+        timeout=timeout,
+        limits=limits,
+    )
+
+
+async def close_http_client(app):
+    client = app.bot_data.pop(HTTP_CLIENT_KEY, None)
+    if client is not None:
+        await client.aclose()
+
+
 def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN이 설정되지 않았습니다.")
-    if not AI_GATEWAY:
-        raise ValueError("AI_GATEWAY가 설정되지 않았습니다.")
+    if not AI_GATEWAY_BASE_URL:
+        raise ValueError("AI_GATEWAY_BASE_URL이 설정되지 않았습니다.")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(init_http_client)
+        .post_shutdown(close_http_client)
+        .build()
+    )
 
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
