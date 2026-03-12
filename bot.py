@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import os
+import time
 
 import httpx
 from dotenv import load_dotenv
@@ -19,6 +21,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 TIMEOUT = float(os.getenv("TIMEOUT", "300"))
 AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
 AI_GATEWAY_PATH = "/generate"
+AI_GATEWAY_STREAM_PATH = "/generate_stream"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
 
@@ -37,6 +40,47 @@ user_finalize_conditions = {}
 
 MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
+TELEGRAM_MESSAGE_MAX_LEN = 4096
+STREAM_EDIT_INTERVAL_SEC = 1.0
+
+
+def fit_telegram_text(text: str) -> str:
+    if len(text) <= TELEGRAM_MESSAGE_MAX_LEN:
+        return text
+    return text[: TELEGRAM_MESSAGE_MAX_LEN - 1] + "…"
+
+
+def extract_stream_delta(raw_line: str) -> tuple[str, bool]:
+    line = raw_line.strip()
+    if not line:
+        return "", False
+
+    payload = line
+    if line.startswith("data:"):
+        payload = line[len("data:") :].strip()
+
+    if payload == "[DONE]":
+        return "", True
+
+    try:
+        obj = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload, False
+
+    if isinstance(obj, dict):
+        if obj.get("done") is True:
+            return "", True
+
+        for key in ("delta", "content", "token", "text"):
+            value = obj.get(key)
+            if isinstance(value, str) and value:
+                return value, False
+
+        response = obj.get("response")
+        if isinstance(response, str):
+            return response, False
+
+    return "", False
 
 
 def get_user_lock(user_id):
@@ -66,7 +110,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     lock = get_user_lock(user_id)
-    waiting_msg = await update.message.reply_text("AI가 답변을 생성 중입니다...")
+    waiting_msg = await update.message.reply_text("생각 중…")
 
     async with lock:
         if user_id not in conversations:
@@ -96,10 +140,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    stream_result = ""
+    last_rendered_text = ""
+    last_edit_ts = 0.0
+
     try:
-        r = await client.post(AI_GATEWAY_PATH, json=payload)
-        r.raise_for_status()
-        result = r.json()["response"]
+        async with client.stream("POST", AI_GATEWAY_STREAM_PATH, json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                delta, done = extract_stream_delta(line)
+                if done:
+                    break
+
+                if not delta:
+                    continue
+
+                if stream_result and delta.startswith(stream_result):
+                    stream_result = delta
+                else:
+                    stream_result += delta
+                now = time.monotonic()
+
+                if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
+                    continue
+
+                draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
+                if draft_text != last_rendered_text:
+                    try:
+                        await waiting_msg.edit_text(draft_text)
+                        last_rendered_text = draft_text
+                        last_edit_ts = now
+                    except Exception as stream_edit_error:
+                        logger.warning(f"Telegram stream edit failed: {stream_edit_error}")
+
+        result = stream_result.strip()
+        if not result:
+            fallback_resp = await client.post(AI_GATEWAY_PATH, json=payload)
+            fallback_resp.raise_for_status()
+            result = fallback_resp.json()["response"]
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error occurred: {e}")
         await waiting_msg.edit_text(
@@ -128,11 +206,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             try:
-                await waiting_msg.edit_text(result)
+                final_text = fit_telegram_text(result)
+                await waiting_msg.edit_text(final_text)
             except Exception as edit_error:
                 logger.error(f"Telegram message edit failed: {edit_error}")
                 try:
-                    await update.message.reply_text(result)
+                    await update.message.reply_text(fit_telegram_text(result))
                 except Exception as reply_error:
                     logger.error(f"Telegram fallback reply failed: {reply_error}")
                     error_summary = str(reply_error).strip() or type(reply_error).__name__
