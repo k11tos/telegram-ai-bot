@@ -1,7 +1,9 @@
 import asyncio
+import ast
 import json
 import logging
 import os
+import re
 import time
 
 import httpx
@@ -55,32 +57,79 @@ def extract_stream_delta(raw_line: str) -> tuple[str, bool]:
     if not line:
         return "", False
 
-    payload = line
-    if line.startswith("data:"):
-        payload = line[len("data:") :].strip()
-
+    payload = line[len("data:") :].strip() if line.startswith("data:") else line
     if payload == "[DONE]":
         return "", True
 
-    try:
-        obj = json.loads(payload)
-    except json.JSONDecodeError:
-        return payload, False
+    candidate_payloads = [payload]
 
-    if isinstance(obj, dict):
-        if obj.get("done") is True:
-            return "", True
+    # Some gateways can serialize streamed chunks into Python bytes literals
+    # like b'{"response":"..."}' or concatenated forms.
+    bytes_literal_chunks = re.findall(r"b'(?:\\.|[^'])*'|b\"(?:\\.|[^\"])*\"", payload)
+    for chunk in bytes_literal_chunks:
+        try:
+            decoded = ast.literal_eval(chunk)
+            if isinstance(decoded, bytes):
+                candidate_payloads.append(decoded.decode("utf-8", errors="ignore"))
+        except (SyntaxError, ValueError):
+            if chunk.startswith("b'") and chunk.endswith("'"):
+                raw_inner = chunk[2:-1]
+            elif chunk.startswith('b"') and chunk.endswith('"'):
+                raw_inner = chunk[2:-1]
+            else:
+                continue
 
-        for key in ("delta", "content", "token", "text"):
-            value = obj.get(key)
-            if isinstance(value, str) and value:
-                return value, False
+            # Fallback for non-standard bytes literal-like strings that contain
+            # non-ASCII characters directly.
+            normalized_inner = (
+                raw_inner.replace("\\\\", "\\")
+                .replace('\\"', '"')
+                .replace("\\'", "'")
+                .replace("\\n", "\n")
+                .replace("\\t", "\t")
+                .replace("\\r", "\r")
+            )
+            candidate_payloads.append(normalized_inner)
 
-        response = obj.get("response")
-        if isinstance(response, str):
-            return response, False
+    decoder = json.JSONDecoder()
+    collected_delta: list[str] = []
+    is_done = False
 
-    return "", False
+    for candidate in candidate_payloads:
+        text = candidate.strip()
+        if not text:
+            continue
+        if text == "[DONE]":
+            is_done = True
+            continue
+
+        # Support both single JSON payload and concatenated JSON payloads.
+        index = 0
+        while index < len(text):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text):
+                break
+
+            try:
+                obj, next_index = decoder.raw_decode(text, index)
+            except json.JSONDecodeError:
+                break
+
+            index = next_index
+            if not isinstance(obj, dict):
+                continue
+
+            if obj.get("done") is True:
+                is_done = True
+
+            for key in ("delta", "content", "token", "text", "response"):
+                value = obj.get(key)
+                if isinstance(value, str) and value:
+                    collected_delta.append(value)
+                    break
+
+    return "".join(collected_delta), is_done
 
 
 def get_user_lock(user_id):
