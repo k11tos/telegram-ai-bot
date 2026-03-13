@@ -39,6 +39,7 @@ user_reset_tokens = {}
 user_turn_counters = {}
 user_next_turn_to_finalize = {}
 user_finalize_conditions = {}
+user_in_flight_requests = {}
 
 MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
@@ -159,7 +160,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     lock = get_user_lock(user_id)
-    waiting_msg = await update.message.reply_text("생각 중…")
 
     # Keep the per-user lock scope minimal: only protect shared state reads/writes
     # needed to prepare this turn. The potentially slow AI call runs without holding
@@ -173,6 +173,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_turn_counters[user_id] = 0
         if user_id not in user_next_turn_to_finalize:
             user_next_turn_to_finalize[user_id] = 1
+        if user_id not in user_in_flight_requests:
+            user_in_flight_requests[user_id] = False
+
+        if user_in_flight_requests[user_id]:
+            logger.info("Request rejected: user %s already has an in-flight request", user_id)
+            await update.message.reply_text("이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요.")
+            return
+
+        user_in_flight_requests[user_id] = True
 
         old_history = conversations[user_id][:]
         reset_token = user_reset_tokens[user_id]
@@ -181,132 +190,147 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
 
-    prompt = "\n".join(new_history) + "\nAI:"
-    payload = {"prompt": prompt}
-    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
-
-    if client is None:
-        logger.error("Shared HTTP client is not initialized")
-        await waiting_msg.edit_text(
-            "죄송합니다. AI 서버 연결이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
-        )
-        return
-
-    stream_result = ""
-    stream_completed_normally = False
-    stream_failed = False
-    last_rendered_text = ""
-    last_edit_ts = 0.0
-
     try:
         try:
-            async with client.stream("POST", AI_GATEWAY_STREAM_PATH, json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    delta, done = extract_stream_delta(line)
-                    if done:
-                        stream_completed_normally = True
-                        break
+            waiting_msg = await update.message.reply_text("생각 중…")
+        except Exception as waiting_msg_error:
+            logger.error(f"Failed to send waiting message: {waiting_msg_error}")
+            finalize_condition = get_user_finalize_condition(user_id)
+            async with finalize_condition:
+                if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                    user_next_turn_to_finalize[user_id] = turn_id + 1
+                    finalize_condition.notify_all()
+            return
 
-                    if not delta:
-                        continue
+        prompt = "\n".join(new_history) + "\nAI:"
+        payload = {"prompt": prompt}
+        client = context.application.bot_data.get(HTTP_CLIENT_KEY)
 
-                    if stream_result and delta.startswith(stream_result):
-                        stream_result = delta
-                    else:
-                        stream_result += delta
-                    now = time.monotonic()
+        if client is None:
+            logger.error("Shared HTTP client is not initialized")
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버 연결이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
 
-                    if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
-                        continue
+        stream_result = ""
+        stream_completed_normally = False
+        stream_failed = False
+        last_rendered_text = ""
+        last_edit_ts = 0.0
 
-                    draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
-                    if draft_text != last_rendered_text:
-                        try:
-                            await waiting_msg.edit_text(draft_text)
-                            last_rendered_text = draft_text
-                            last_edit_ts = now
-                        except Exception as stream_edit_error:
-                            logger.warning(f"Telegram stream edit failed: {stream_edit_error}")
-        except (httpx.HTTPStatusError, httpx.RequestError) as stream_error:
-            stream_failed = True
-            logger.warning(f"Streaming request failed; will fall back to /chat: {stream_error}")
-
-        result = stream_result.strip()
-        should_fallback = stream_failed or not result or not stream_completed_normally
-        if should_fallback:
-            if result and not stream_completed_normally:
-                logger.warning(
-                    "Discarding partial streamed output due to missing completion signal; "
-                    "falling back to /chat response"
-                )
-            fallback_resp = await client.post(AI_GATEWAY_CHAT_PATH, json=payload)
-            fallback_resp.raise_for_status()
-            result = fallback_resp.json()["response"]
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error occurred: {e}")
-        await waiting_msg.edit_text(
-            "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-        )
-        return
-    except httpx.RequestError as e:
-        logger.error(f"Request error occurred: {e}")
-        await waiting_msg.edit_text(
-            "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
-        )
-        return
-    except (ValueError, KeyError) as e:
-        logger.error(f"Failed to parse JSON response: {e}")
-        await waiting_msg.edit_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
-        return
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
-        return
-
-    response_delivered = True
-    try:
-        final_text = fit_telegram_text(result)
-        await waiting_msg.edit_text(final_text)
-    except Exception as edit_error:
-        logger.error(f"Telegram message edit failed: {edit_error}")
         try:
-            await update.message.reply_text(fit_telegram_text(result))
-        except Exception as reply_error:
-            logger.error(f"Telegram fallback reply failed: {reply_error}")
-            error_summary = str(reply_error).strip() or type(reply_error).__name__
-            if len(error_summary) > 120:
-                error_summary = error_summary[:117] + "..."
             try:
-                await update.message.reply_text(
-                    f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
-                )
-            except Exception as notify_error:
-                logger.error(f"Telegram error-notice send failed: {notify_error}")
-            # Never let Telegram send failures skip finalization ordering.
-            response_delivered = False
+                async with client.stream("POST", AI_GATEWAY_STREAM_PATH, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        delta, done = extract_stream_delta(line)
+                        if done:
+                            stream_completed_normally = True
+                            break
 
-    finalize_condition = get_user_finalize_condition(user_id)
-    # Reacquire the shared per-user lock only for finalization ordering and history
-    # mutation. Turn numbers still serialize this section to preserve ordering.
-    async with finalize_condition:
-        while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
-            await finalize_condition.wait()
+                        if not delta:
+                            continue
 
+                        if stream_result and delta.startswith(stream_result):
+                            stream_result = delta
+                        else:
+                            stream_result += delta
+                        now = time.monotonic()
+
+                        if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
+                            continue
+
+                        draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
+                        if draft_text != last_rendered_text:
+                            try:
+                                await waiting_msg.edit_text(draft_text)
+                                last_rendered_text = draft_text
+                                last_edit_ts = now
+                            except Exception as stream_edit_error:
+                                logger.warning(f"Telegram stream edit failed: {stream_edit_error}")
+            except (httpx.HTTPStatusError, httpx.RequestError) as stream_error:
+                stream_failed = True
+                logger.warning(f"Streaming request failed; will fall back to /chat: {stream_error}")
+
+            result = stream_result.strip()
+            should_fallback = stream_failed or not result or not stream_completed_normally
+            if should_fallback:
+                if result and not stream_completed_normally:
+                    logger.warning(
+                        "Discarding partial streamed output due to missing completion signal; "
+                        "falling back to /chat response"
+                    )
+                fallback_resp = await client.post(AI_GATEWAY_CHAT_PATH, json=payload)
+                fallback_resp.raise_for_status()
+                result = fallback_resp.json()["response"]
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error occurred: {e}")
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
+        except httpx.RequestError as e:
+            logger.error(f"Request error occurred: {e}")
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
+        except (ValueError, KeyError) as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            await waiting_msg.edit_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
+            return
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
+            return
+
+        response_delivered = True
         try:
-            if not response_delivered:
-                return
+            final_text = fit_telegram_text(result)
+            await waiting_msg.edit_text(final_text)
+        except Exception as edit_error:
+            logger.error(f"Telegram message edit failed: {edit_error}")
+            try:
+                await update.message.reply_text(fit_telegram_text(result))
+            except Exception as reply_error:
+                logger.error(f"Telegram fallback reply failed: {reply_error}")
+                error_summary = str(reply_error).strip() or type(reply_error).__name__
+                if len(error_summary) > 120:
+                    error_summary = error_summary[:117] + "..."
+                try:
+                    await update.message.reply_text(
+                        f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
+                    )
+                except Exception as notify_error:
+                    logger.error(f"Telegram error-notice send failed: {notify_error}")
+                # Never let Telegram send failures skip finalization ordering.
+                response_delivered = False
 
-            if user_reset_tokens.get(user_id, 0) != reset_token:
-                logger.info("Conversation reset detected during request; skipping stale history update.")
-                return
+        finalize_condition = get_user_finalize_condition(user_id)
+        # Reacquire the shared per-user lock only for finalization ordering and history
+        # mutation. Turn numbers still serialize this section to preserve ordering.
+        async with finalize_condition:
+            while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
+                await finalize_condition.wait()
 
-            current_history = conversations.get(user_id, [])
-            updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
-            conversations[user_id] = updated_history[-MAX_HISTORY:]
-        finally:
-            user_next_turn_to_finalize[user_id] = turn_id + 1
-            finalize_condition.notify_all()
+            try:
+                if not response_delivered:
+                    return
+
+                if user_reset_tokens.get(user_id, 0) != reset_token:
+                    logger.info("Conversation reset detected during request; skipping stale history update.")
+                    return
+
+                current_history = conversations.get(user_id, [])
+                updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
+                conversations[user_id] = updated_history[-MAX_HISTORY:]
+            finally:
+                user_next_turn_to_finalize[user_id] = turn_id + 1
+                finalize_condition.notify_all()
+    finally:
+        async with lock:
+            user_in_flight_requests[user_id] = False
 
 
 async def init_http_client(app):
