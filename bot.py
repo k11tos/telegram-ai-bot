@@ -191,7 +191,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_history = new_history[-MAX_HISTORY:]
 
     try:
-        waiting_msg = await update.message.reply_text("생각 중…")
+        try:
+            waiting_msg = await update.message.reply_text("생각 중…")
+        except Exception as waiting_msg_error:
+            logger.error(f"Failed to send waiting message: {waiting_msg_error}")
+            finalize_condition = get_user_finalize_condition(user_id)
+            async with finalize_condition:
+                if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                    user_next_turn_to_finalize[user_id] = turn_id + 1
+                    finalize_condition.notify_all()
+            return
 
         prompt = "\n".join(new_history) + "\nAI:"
         payload = {"prompt": prompt}
