@@ -21,12 +21,51 @@ from telegram.ext import (
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TIMEOUT = float(os.getenv("TIMEOUT", "300"))
 AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
 AI_GATEWAY_CHAT_PATH = "/chat"
 AI_GATEWAY_STREAM_PATH = "/generate_stream"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
+
+DEFAULT_CONNECT_TIMEOUT = 5.0
+DEFAULT_READ_TIMEOUT = 300.0
+DEFAULT_WRITE_TIMEOUT = 30.0
+DEFAULT_POOL_TIMEOUT = 5.0
+
+
+def resolve_http_timeout_config() -> dict[str, float]:
+    legacy_timeout_value = os.getenv("TIMEOUT")
+    legacy_timeout = float(legacy_timeout_value) if legacy_timeout_value else None
+
+    return {
+        "connect": float(
+            os.getenv(
+                "HTTP_CONNECT_TIMEOUT",
+                legacy_timeout if legacy_timeout is not None else DEFAULT_CONNECT_TIMEOUT,
+            )
+        ),
+        "read": float(
+            os.getenv(
+                "HTTP_READ_TIMEOUT",
+                legacy_timeout if legacy_timeout is not None else DEFAULT_READ_TIMEOUT,
+            )
+        ),
+        "write": float(
+            os.getenv(
+                "HTTP_WRITE_TIMEOUT",
+                legacy_timeout if legacy_timeout is not None else DEFAULT_WRITE_TIMEOUT,
+            )
+        ),
+        "pool": float(
+            os.getenv(
+                "HTTP_POOL_TIMEOUT",
+                legacy_timeout if legacy_timeout is not None else DEFAULT_POOL_TIMEOUT,
+            )
+        ),
+    }
+
+
+HTTP_TIMEOUT_CONFIG = resolve_http_timeout_config()
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -278,9 +317,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except (httpx.HTTPStatusError, httpx.RequestError) as stream_error:
                 stream_failed = True
                 latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+                stream_error_type = type(stream_error).__name__
                 logger.warning(
                     f"streaming_fallback request_id={request_id} user_id={user_id} "
-                    f"chat_id={chat_id} latency_ms={latency_ms} error={stream_error}"
+                    f"chat_id={chat_id} latency_ms={latency_ms} "
+                    f"error_type={stream_error_type} error={stream_error}"
                 )
 
             result = stream_result.strip()
@@ -307,11 +348,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
             )
             return
-        except httpx.RequestError as e:
+        except httpx.ConnectTimeout as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.error(
-                f"gateway_request_error request_id={request_id} user_id={user_id} "
+                f"gateway_connect_timeout request_id={request_id} user_id={user_id} "
                 f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
+            )
+            await waiting_msg.edit_text("AI 서버 연결이 지연되고 있어요. 잠시 후 다시 시도해주세요.")
+            return
+        except httpx.ReadTimeout as e:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.error(
+                f"gateway_read_timeout request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
+            )
+            await waiting_msg.edit_text("응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.")
+            return
+        except httpx.WriteTimeout as e:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.error(
+                f"gateway_write_timeout request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
+            )
+            await waiting_msg.edit_text("요청 전송이 지연되고 있어요. 잠시 후 다시 시도해주세요.")
+            return
+        except httpx.PoolTimeout as e:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.error(
+                f"gateway_pool_timeout request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
+            )
+            await waiting_msg.edit_text("요청이 몰리고 있어요. 잠시 후 다시 시도해주세요.")
+            return
+        except httpx.ConnectError as e:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.error(
+                f"gateway_connect_error request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
+            )
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
+        except httpx.RequestError as e:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            request_error_type = type(e).__name__
+            logger.error(
+                f"gateway_request_error request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms} "
+                f"error_type={request_error_type} error={e}"
             )
             await waiting_msg.edit_text(
                 "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
@@ -410,10 +495,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def init_http_client(app):
-    timeout = httpx.Timeout(TIMEOUT)
+    timeout = httpx.Timeout(
+        connect=HTTP_TIMEOUT_CONFIG["connect"],
+        read=HTTP_TIMEOUT_CONFIG["read"],
+        write=HTTP_TIMEOUT_CONFIG["write"],
+        pool=HTTP_TIMEOUT_CONFIG["pool"],
+    )
     limits = httpx.Limits(
         max_keepalive_connections=MAX_KEEPALIVE_CONNECTIONS,
         max_connections=MAX_CONNECTIONS,
+    )
+    logger.info(
+        "http_client_timeout_config connect=%s read=%s write=%s pool=%s",
+        HTTP_TIMEOUT_CONFIG["connect"],
+        HTTP_TIMEOUT_CONFIG["read"],
+        HTTP_TIMEOUT_CONFIG["write"],
+        HTTP_TIMEOUT_CONFIG["pool"],
     )
     app.bot_data[HTTP_CLIENT_KEY] = httpx.AsyncClient(
         base_url=AI_GATEWAY_BASE_URL,
