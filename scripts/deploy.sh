@@ -32,7 +32,9 @@ log "Validating required environment variables"
 require_env APP_DIR
 require_env SERVICE_NAME
 
-if [[ "$APP_DIR" == ~* ]]; then
+if [[ "$APP_DIR" == "~" ]]; then
+  APP_DIR="$HOME"
+elif [[ "$APP_DIR" == ~/* ]]; then
   APP_DIR="${APP_DIR/#\~/$HOME}"
 fi
 
