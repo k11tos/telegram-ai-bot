@@ -1,0 +1,122 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_dir:
+        description: "Application directory on Raspberry Pi (optional; falls back to BOT_APP_DIR secret)"
+        required: false
+        default: ""
+        type: string
+      service_name:
+        description: "systemd service name"
+        required: false
+        default: "telegram-bot"
+        type: string
+      branch:
+        description: "Git branch to deploy"
+        required: false
+        default: "main"
+        type: string
+      startup_wait_seconds:
+        description: "Seconds to wait after restart"
+        required: false
+        default: "3"
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets and resolve deploy inputs
+        id: validate
+        env:
+          INPUT_APP_DIR: ${{ github.event.inputs.app_dir }}
+          INPUT_SERVICE_NAME: ${{ github.event.inputs.service_name }}
+          INPUT_BRANCH: ${{ github.event.inputs.branch }}
+          INPUT_STARTUP_WAIT_SECONDS: ${{ github.event.inputs.startup_wait_seconds }}
+          PI_HOST: ${{ secrets.PI_HOST }}
+          PI_USER: ${{ secrets.PI_USER }}
+          PI_SSH_KEY: ${{ secrets.PI_SSH_KEY }}
+          PI_PORT: ${{ secrets.PI_PORT }}
+          BOT_APP_DIR: ${{ secrets.BOT_APP_DIR }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${PI_HOST:-}" ]]; then
+            echo "Error: required secret PI_HOST is missing." >&2
+            exit 1
+          fi
+          if [[ -z "${PI_USER:-}" ]]; then
+            echo "Error: required secret PI_USER is missing." >&2
+            exit 1
+          fi
+          if [[ -z "${PI_SSH_KEY:-}" ]]; then
+            echo "Error: required secret PI_SSH_KEY is missing." >&2
+            exit 1
+          fi
+
+          resolved_app_dir="${INPUT_APP_DIR:-}"
+          if [[ -z "$resolved_app_dir" ]]; then
+            resolved_app_dir="${BOT_APP_DIR:-}"
+          fi
+          if [[ -z "$resolved_app_dir" ]]; then
+            echo "Error: app_dir input is empty and BOT_APP_DIR secret is not set." >&2
+            exit 1
+          fi
+
+          resolved_port="${PI_PORT:-22}"
+
+          {
+            echo "app_dir=$resolved_app_dir"
+            echo "service_name=${INPUT_SERVICE_NAME:-telegram-bot}"
+            echo "branch=${INPUT_BRANCH:-main}"
+            echo "startup_wait_seconds=${INPUT_STARTUP_WAIT_SECONDS:-3}"
+            echo "ssh_port=$resolved_port"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH
+        env:
+          PI_HOST: ${{ secrets.PI_HOST }}
+          PI_USER: ${{ secrets.PI_USER }}
+          PI_SSH_KEY: ${{ secrets.PI_SSH_KEY }}
+          SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$PI_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "$SSH_PORT" -H "$PI_HOST" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Copy deploy script to Raspberry Pi
+        env:
+          PI_HOST: ${{ secrets.PI_HOST }}
+          PI_USER: ${{ secrets.PI_USER }}
+          SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o BatchMode=yes -P "$SSH_PORT" scripts/deploy.sh "$PI_USER@$PI_HOST:/tmp/telegram-ai-bot-deploy.sh"
+
+      - name: Execute deploy script via SSH
+        env:
+          PI_HOST: ${{ secrets.PI_HOST }}
+          PI_USER: ${{ secrets.PI_USER }}
+          SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
+          APP_DIR: ${{ steps.validate.outputs.app_dir }}
+          SERVICE_NAME: ${{ steps.validate.outputs.service_name }}
+          BRANCH: ${{ steps.validate.outputs.branch }}
+          STARTUP_WAIT_SECONDS: ${{ steps.validate.outputs.startup_wait_seconds }}
+        run: |
+          set -euo pipefail
+          printf -v APP_DIR_Q '%q' "$APP_DIR"
+          printf -v SERVICE_NAME_Q '%q' "$SERVICE_NAME"
+          printf -v BRANCH_Q '%q' "$BRANCH"
+          printf -v STARTUP_WAIT_SECONDS_Q '%q' "$STARTUP_WAIT_SECONDS"
+
+          ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o BatchMode=yes -p "$SSH_PORT" "$PI_USER@$PI_HOST" \
+            "chmod +x /tmp/telegram-ai-bot-deploy.sh && APP_DIR=$APP_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q bash /tmp/telegram-ai-bot-deploy.sh"
