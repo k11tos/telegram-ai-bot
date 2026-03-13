@@ -1,0 +1,73 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  pr-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Python syntax validation
+        run: |
+          set -euo pipefail
+          python -m py_compile bot.py
+
+      - name: App import validation
+        run: |
+          set -euo pipefail
+          python -c "import bot; assert callable(getattr(bot, 'main', None)), 'bot.main() not found'; assert getattr(bot, 'AI_GATEWAY_CHAT_PATH', None) == '/chat', 'AI_GATEWAY_CHAT_PATH mismatch'; assert getattr(bot, 'AI_GATEWAY_STREAM_PATH', None) == '/generate_stream', 'AI_GATEWAY_STREAM_PATH mismatch'; print('Import check passed for bot.py')"
+
+      - name: Lint (if linter is installed)
+        run: |
+          set -euo pipefail
+
+          if python -m ruff --version >/dev/null 2>&1; then
+            python -m ruff check bot.py
+            exit 0
+          fi
+
+          if python -m flake8 --version >/dev/null 2>&1; then
+            python -m flake8 bot.py
+            exit 0
+          fi
+
+          if python -m pylint --version >/dev/null 2>&1; then
+            python -m pylint bot.py
+            exit 0
+          fi
+
+          echo 'No supported linter installed via project dependencies; skipping lint.'
+
+      - name: Pytest (if tests exist)
+        run: |
+          set -euo pipefail
+
+          if find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | grep -q .; then
+            if python -m pytest --version >/dev/null 2>&1; then
+              python -m pytest -q
+              exit 0
+            fi
+            echo 'Test files exist but pytest is not installed via project dependencies.'
+            exit 1
+          fi
+
+          echo 'No pytest-style test files found; skipping tests.'
