@@ -2,13 +2,15 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 import bot
 
 
 class FakeStreamResponse:
-    def __init__(self, lines):
+    def __init__(self, lines, status_error=None):
         self._lines = lines
+        self._status_error = status_error
 
     async def __aenter__(self):
         return self
@@ -17,6 +19,8 @@ class FakeStreamResponse:
         return False
 
     def raise_for_status(self):
+        if self._status_error is not None:
+            raise self._status_error
         return None
 
     async def aiter_lines(self):
@@ -25,22 +29,40 @@ class FakeStreamResponse:
 
 
 class FakePostResponse:
-    def __init__(self, payload):
+    def __init__(self, payload=None, status_error=None, json_error=None):
         self._payload = payload
+        self._status_error = status_error
+        self._json_error = json_error
 
     def raise_for_status(self):
+        if self._status_error is not None:
+            raise self._status_error
         return None
 
     def json(self):
+        if self._json_error is not None:
+            raise self._json_error
         return self._payload
 
 
 class FakeClient:
-    def __init__(self, stream_lines=None, stream_error=None, post_payload=None, post_error=None):
+    def __init__(
+        self,
+        stream_lines=None,
+        stream_error=None,
+        stream_status_error=None,
+        post_payload=None,
+        post_error=None,
+        post_status_error=None,
+        post_json_error=None,
+    ):
         self.stream_lines = stream_lines or []
         self.stream_error = stream_error
+        self.stream_status_error = stream_status_error
         self.post_payload = post_payload
         self.post_error = post_error
+        self.post_status_error = post_status_error
+        self.post_json_error = post_json_error
         self.stream_calls = []
         self.post_calls = []
 
@@ -48,13 +70,17 @@ class FakeClient:
         self.stream_calls.append({"method": method, "path": path, "json": json, "headers": headers})
         if self.stream_error is not None:
             raise self.stream_error
-        return FakeStreamResponse(self.stream_lines)
+        return FakeStreamResponse(self.stream_lines, status_error=self.stream_status_error)
 
     async def post(self, path, json=None, headers=None):
         self.post_calls.append({"path": path, "json": json, "headers": headers})
         if self.post_error is not None:
             raise self.post_error
-        return FakePostResponse(self.post_payload)
+        return FakePostResponse(
+            payload=self.post_payload,
+            status_error=self.post_status_error,
+            json_error=self.post_json_error,
+        )
 
 
 def test_first_message_initializes_history_and_calls_gateway(make_update_context):
@@ -128,3 +154,131 @@ def test_backend_request_error_is_handled_gracefully(make_update_context):
     assert bot.conversations[123] == []
     assert update.message.waiting_message.edits[-1] == "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
     assert bot.user_in_flight_requests[123] is False
+
+
+@pytest.mark.parametrize(
+    ("history_size", "expected_oldest_index"),
+    [
+        (bot.MAX_HISTORY - 1, 0),
+        (bot.MAX_HISTORY, 1),
+        (bot.MAX_HISTORY + 1, 2),
+    ],
+)
+def test_prompt_history_boundaries_keep_expected_recent_lines(
+    make_update_context, history_size, expected_oldest_index
+):
+    user_id = 91
+    base_history = [f"H{i}" for i in range(history_size)]
+    bot.conversations[user_id] = base_history[:]
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '경계 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+
+    update, context = make_update_context(user_id=user_id, text="경계 질문", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    expected_prompt_lines = (base_history + ["User: 경계 질문"])[-bot.MAX_HISTORY :]
+    assert expected_prompt_lines[0] == f"H{expected_oldest_index}"
+    assert client.stream_calls[0]["json"]["prompt"] == "\n".join(expected_prompt_lines) + "\nAI:"
+
+
+def test_prompt_includes_exact_history_order_and_role_prefixes(make_update_context):
+    user_id = 1001
+    bot.conversations[user_id] = ["User: 첫 질문", "AI: 첫 답변", "User: 둘째 질문", "AI: 둘째 답변"]
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '셋째 답변'})}",
+            "data: [DONE]",
+        ]
+    )
+
+    update, context = make_update_context(user_id=user_id, text="셋째 질문", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 첫 질문\nAI: 첫 답변\nUser: 둘째 질문\nAI: 둘째 답변\nUser: 셋째 질문\nAI:"
+    }
+
+
+def test_multi_user_history_is_isolated(make_update_context):
+    user_a = 11
+    user_b = 22
+    client_a = FakeClient(stream_lines=[f"data: {json.dumps({'response': 'A응답'})}", "data: [DONE]"])
+    client_b = FakeClient(stream_lines=[f"data: {json.dumps({'response': 'B응답'})}", "data: [DONE]"])
+
+    update_a, context_a = make_update_context(user_id=user_a, text="A질문", client=client_a)
+    update_b, context_b = make_update_context(user_id=user_b, text="B질문", client=client_b)
+
+    asyncio.run(bot.handle_message(update_a, context_a))
+    asyncio.run(bot.handle_message(update_b, context_b))
+
+    assert bot.conversations[user_a] == ["User: A질문", "AI: A응답"]
+    assert bot.conversations[user_b] == ["User: B질문", "AI: B응답"]
+    assert client_a.stream_calls[0]["json"]["prompt"] == "User: A질문\nAI:"
+    assert client_b.stream_calls[0]["json"]["prompt"] == "User: B질문\nAI:"
+
+
+def test_reset_clears_prior_conversation_for_next_prompt(make_update_context):
+    user_id = 333
+    initial_client = FakeClient(
+        stream_lines=[f"data: {json.dumps({'response': '이전 응답'})}", "data: [DONE]"]
+    )
+    first_update, first_context = make_update_context(user_id=user_id, text="이전 질문", client=initial_client)
+    asyncio.run(bot.handle_message(first_update, first_context))
+
+    reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+    asyncio.run(bot.reset(reset_update, reset_context))
+
+    next_client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '새 응답'})}", "data: [DONE]"])
+    next_update, next_context = make_update_context(user_id=user_id, text="새 질문", client=next_client)
+    asyncio.run(bot.handle_message(next_update, next_context))
+
+    assert next_client.stream_calls[0]["json"]["prompt"] == "User: 새 질문\nAI:"
+    assert bot.conversations[user_id] == ["User: 새 질문", "AI: 새 응답"]
+
+
+@pytest.mark.parametrize(
+    ("post_kwargs", "expected_message"),
+    [
+        ({"post_error": httpx.ReadTimeout("read timeout")}, "응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요."),
+        ({"post_json_error": ValueError("bad json")}, "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."),
+        ({"post_payload": {}}, "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."),
+    ],
+)
+def test_fallback_resilience_errors_are_user_friendly(make_update_context, post_kwargs, expected_message):
+    request = httpx.Request("POST", "http://test/gateway")
+    client = FakeClient(stream_error=httpx.RequestError("stream failed", request=request), **post_kwargs)
+    update, context = make_update_context(text="복원력 테스트", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert update.message.waiting_message.edits[-1] == expected_message
+    assert bot.conversations[123] == []
+
+
+def test_non_200_fallback_response_is_handled(make_update_context):
+    request = httpx.Request("POST", "http://test/chat")
+    response = httpx.Response(503, request=request)
+    client = FakeClient(
+        stream_error=httpx.RequestError("stream failed", request=request),
+        post_status_error=httpx.HTTPStatusError("service unavailable", request=request, response=response),
+    )
+    update, context = make_update_context(text="상태 코드 테스트", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert update.message.waiting_message.edits[-1] == "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+    assert bot.conversations[123] == []
+
+
+def test_empty_user_input_still_constructs_deterministic_prompt(make_update_context):
+    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '빈 입력 응답'})}", "data: [DONE]"])
+    update, context = make_update_context(text="", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert client.stream_calls[0]["json"] == {"prompt": "User: \nAI:"}
+    assert bot.conversations[123] == ["User: ", "AI: 빈 입력 응답"]
