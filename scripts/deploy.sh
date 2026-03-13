@@ -32,6 +32,10 @@ log "Validating required environment variables"
 require_env APP_DIR
 require_env SERVICE_NAME
 
+if [[ "$APP_DIR" == ~* ]]; then
+  APP_DIR="${APP_DIR/#\~/$HOME}"
+fi
+
 log "Changing directory to APP_DIR: $APP_DIR"
 if ! cd "$APP_DIR"; then
   echo "Error: failed to change directory to APP_DIR '$APP_DIR'." >&2
@@ -44,20 +48,23 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-current_commit="$(git rev-parse HEAD)"
-log "Current commit: $current_commit"
+previous_commit="$(git rev-parse HEAD)"
+log "Previous commit (before deploy): $previous_commit"
 
-log "Fetching latest refs from origin"
-git fetch origin
+log "Fetching latest refs from origin/$BRANCH"
+git fetch --prune origin "$BRANCH"
 
-log "Checking out branch: $BRANCH"
-if ! git checkout "$BRANCH"; then
-  echo "Error: failed to checkout branch '$BRANCH'." >&2
+target_ref="origin/$BRANCH"
+if ! git rev-parse --verify --quiet "$target_ref" >/dev/null; then
+  echo "Error: branch '$BRANCH' was not found on origin." >&2
   exit 1
 fi
 
-log "Pulling latest changes for branch: $BRANCH"
-git pull --ff-only origin "$BRANCH"
+log "Checking out branch '$BRANCH' at $target_ref"
+if ! git checkout -B "$BRANCH" "$target_ref"; then
+  echo "Error: failed to checkout '$target_ref' to local branch '$BRANCH'." >&2
+  exit 1
+fi
 
 log "Restarting service: $SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
@@ -67,5 +74,14 @@ if [[ -n "$STARTUP_WAIT_SECONDS" ]]; then
   sleep "$STARTUP_WAIT_SECONDS"
 fi
 
+log "Running post-restart smoke check (systemctl is-active)"
+if ! sudo systemctl is-active --quiet "$SERVICE_NAME"; then
+  echo "Error: service '$SERVICE_NAME' is not active after restart." >&2
+  log "Recent journal logs for $SERVICE_NAME:"
+  sudo journalctl -u "$SERVICE_NAME" -n 60 --no-pager
+  exit 1
+fi
+
 new_commit="$(git rev-parse HEAD)"
-log "Deployment complete. Current commit: $new_commit"
+log "New commit (deployed): $new_commit"
+log "Deployment complete. Service '$SERVICE_NAME' is active."
