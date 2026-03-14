@@ -321,3 +321,45 @@ def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_u
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {"prompt": "User: 공백 질문\nAI:"}
+
+
+def test_preset_constants_are_defined_centrally():
+    assert bot.SUPPORTED_PRESETS == ("normal", "coder", "english", "quant")
+    assert bot.DEFAULT_PRESET == "normal"
+
+
+def test_handle_message_uses_active_preset_prefix_for_non_default_preset(make_update_context):
+    user_id = 808
+    bot.user_selected_presets[user_id] = "coder"
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '코드 중심 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+
+    update, context = make_update_context(user_id=user_id, text="리팩토링 해줘", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    expected_prompt = (
+        f"{bot.PRESET_PROMPT_PREFIXES['coder']}\n\n"
+        "User: 리팩토링 해줘\nAI:"
+    )
+    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+
+
+def test_invalid_preset_falls_back_to_normal_without_prefix(make_update_context):
+    user_id = 909
+    bot.user_selected_presets[user_id] = "unsupported"
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '기본 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+
+    update, context = make_update_context(user_id=user_id, text="기본 동작", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    assert bot.resolve_active_preset(user_id) == "normal"
+    assert client.stream_calls[0]["json"] == {"prompt": "User: 기본 동작\nAI:"}
