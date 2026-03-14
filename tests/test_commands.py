@@ -155,6 +155,17 @@ def test_model_command_resets_selected_model_with_reset_alias(make_update_contex
     assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
 
 
+def test_model_command_resets_selected_model_with_mixed_case_alias(make_update_context):
+    user_id = 92
+    bot.user_selected_models[user_id] = "gpt-4o-mini"
+    update, context = make_update_context(user_id=user_id, text="/model DEFAULT", client=None, args=["DEFAULT"])
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert bot.user_selected_models.get(user_id) is None
+    assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+
+
 class FakeGetResponse:
     def __init__(self, payload=None, status_error=None, json_error=None):
         self._payload = payload
