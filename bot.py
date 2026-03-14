@@ -76,6 +76,7 @@ logger = logging.getLogger(__name__)
 
 # 사용자별 대화 저장
 conversations = {}
+user_active_sessions = {}
 user_locks = {}
 user_reset_tokens = {}
 user_turn_counters = {}
@@ -103,6 +104,7 @@ if set(PRESET_PROMPT_PREFIXES.keys()) != set(SUPPORTED_PRESETS):
     raise AssertionError("SUPPORTED_PRESETS and PRESET_PROMPT_PREFIXES keys must match exactly")
 
 MAX_HISTORY = 10
+DEFAULT_SESSION_NAME = "default"
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 STREAM_EDIT_INTERVAL_SEC = 1.0
@@ -113,6 +115,7 @@ HELP_LINES = [
     "/preset [name] - 현재 프리셋 확인 또는 변경",
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
+    "/session [name] - 현재 세션 확인 또는 변경",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -134,9 +137,24 @@ def _normalize_int_key_mapping(source: dict) -> dict[int, object]:
 
 
 def build_state_payload() -> dict[str, object]:
+    serialized_conversations: dict[str, dict[str, list[str]]] = {}
+    for user_id, per_session in conversations.items():
+        if not isinstance(per_session, dict):
+            continue
+        session_payload = {
+            session_name: history
+            for session_name, history in per_session.items()
+            if isinstance(session_name, str) and isinstance(history, list)
+        }
+        if session_payload:
+            serialized_conversations[str(user_id)] = session_payload
+
     return {
         "version": 1,
-        "conversations": {str(user_id): history for user_id, history in conversations.items()},
+        "conversations": serialized_conversations,
+        "active_sessions": {
+            str(user_id): session_name for user_id, session_name in user_active_sessions.items()
+        },
         "selected_models": {
             str(user_id): model for user_id, model in user_selected_models.items()
         },
@@ -159,7 +177,8 @@ def save_bot_state() -> None:
 
 
 def load_bot_state() -> None:
-    loaded_conversations: dict[int, list[str]] = {}
+    loaded_conversations: dict[int, dict[str, list[str]]] = {}
+    loaded_active_sessions: dict[int, str] = {}
     loaded_models: dict[int, str] = {}
     loaded_presets: dict[int, str] = {}
 
@@ -178,12 +197,36 @@ def load_bot_state() -> None:
                 raw_conversations = payload.get("conversations", {})
                 if isinstance(raw_conversations, dict):
                     normalized_conversations = _normalize_int_key_mapping(raw_conversations)
-                    for user_id, history in normalized_conversations.items():
-                        if not isinstance(history, list):
+                    for user_id, raw_history in normalized_conversations.items():
+                        per_session_histories: dict[str, list[str]] = {}
+                        if isinstance(raw_history, list):
+                            # Backward-compatible shape: user -> history list
+                            cleaned_history = [line for line in raw_history if isinstance(line, str)]
+                            per_session_histories[DEFAULT_SESSION_NAME] = cleaned_history[-MAX_HISTORY:]
+                        elif isinstance(raw_history, dict):
+                            for raw_session_name, session_history in raw_history.items():
+                                if not isinstance(raw_session_name, str) or not isinstance(
+                                    session_history, list
+                                ):
+                                    continue
+                                normalized_session_name = normalize_session_name(raw_session_name)
+                                cleaned_history = [
+                                    line for line in session_history if isinstance(line, str)
+                                ]
+                                per_session_histories[normalized_session_name] = cleaned_history[
+                                    -MAX_HISTORY:
+                                ]
+
+                        if per_session_histories:
+                            loaded_conversations[user_id] = per_session_histories
+
+                raw_active_sessions = payload.get("active_sessions", {})
+                if isinstance(raw_active_sessions, dict):
+                    normalized_active_sessions = _normalize_int_key_mapping(raw_active_sessions)
+                    for user_id, raw_session_name in normalized_active_sessions.items():
+                        if not isinstance(raw_session_name, str):
                             continue
-                        cleaned_history = [line for line in history if isinstance(line, str)]
-                        if cleaned_history:
-                            loaded_conversations[user_id] = cleaned_history[-MAX_HISTORY:]
+                        loaded_active_sessions[user_id] = normalize_session_name(raw_session_name)
 
                 raw_models = payload.get("selected_models", {})
                 if isinstance(raw_models, dict):
@@ -204,10 +247,58 @@ def load_bot_state() -> None:
 
     conversations.clear()
     conversations.update(loaded_conversations)
+    user_active_sessions.clear()
+    user_active_sessions.update(loaded_active_sessions)
     user_selected_models.clear()
     user_selected_models.update(loaded_models)
     user_selected_presets.clear()
     user_selected_presets.update(loaded_presets)
+
+
+def normalize_session_name(raw_name: str) -> str:
+    normalized = raw_name.strip()
+    if not normalized:
+        return DEFAULT_SESSION_NAME
+    return normalized[:32]
+
+
+def get_active_session_name(user_id: int) -> str:
+    session_name = user_active_sessions.get(user_id)
+    if not isinstance(session_name, str):
+        return DEFAULT_SESSION_NAME
+    return normalize_session_name(session_name)
+
+
+def ensure_user_sessions(user_id: int) -> dict[str, list[str]]:
+    raw_per_session = conversations.get(user_id)
+    if isinstance(raw_per_session, dict):
+        per_session = raw_per_session
+    elif isinstance(raw_per_session, list):
+        # Backward-compatibility for already-loaded in-memory legacy shape.
+        per_session = {DEFAULT_SESSION_NAME: [line for line in raw_per_session if isinstance(line, str)]}
+        conversations[user_id] = per_session
+    else:
+        per_session = {}
+        conversations[user_id] = per_session
+
+    for session_name, history in list(per_session.items()):
+        if not isinstance(session_name, str) or not isinstance(history, list):
+            per_session.pop(session_name, None)
+            continue
+
+        normalized_name = normalize_session_name(session_name)
+        cleaned_history = [line for line in history if isinstance(line, str)][-MAX_HISTORY:]
+        if normalized_name != session_name:
+            per_session.pop(session_name, None)
+        per_session[normalized_name] = cleaned_history
+
+    return per_session
+
+
+def get_session_history(user_id: int, session_name: str | None = None) -> list[str]:
+    active_session = normalize_session_name(session_name or get_active_session_name(user_id))
+    per_session = ensure_user_sessions(user_id)
+    return per_session.setdefault(active_session, [])
 
 
 def sanitize_version_value(value: str, max_length: int = 64) -> str:
@@ -420,10 +511,28 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     lock = get_user_lock(user_id)
     async with lock:
-        conversations[user_id] = []
+        active_session = get_active_session_name(user_id)
+        get_session_history(user_id, active_session).clear()
         user_reset_tokens[user_id] = user_reset_tokens.get(user_id, 0) + 1
         save_bot_state()
     await update.message.reply_text("대화 기록을 초기화했습니다.")
+
+
+async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    requested_session = " ".join(context.args).strip() if context.args else ""
+
+    if not requested_session:
+        await update.message.reply_text(f"현재 세션: {get_active_session_name(user_id)}")
+        return
+
+    next_session = normalize_session_name(requested_session)
+    lock = get_user_lock(user_id)
+    async with lock:
+        user_active_sessions[user_id] = next_session
+        get_session_history(user_id, next_session)
+        save_bot_state()
+    await update.message.reply_text(f"세션 변경: {next_session}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -670,8 +779,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # needed to prepare this turn. The potentially slow AI call runs without holding
     # the lock so later messages from the same user can start in parallel.
     async with lock:
-        if user_id not in conversations:
-            conversations[user_id] = []
+        active_session = get_active_session_name(user_id)
+        history = get_session_history(user_id, active_session)
         if user_id not in user_reset_tokens:
             user_reset_tokens[user_id] = 0
         if user_id not in user_turn_counters:
@@ -691,7 +800,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_in_flight_requests[user_id] = True
 
-        old_history = conversations[user_id][:]
+        old_history = history[:]
         reset_token = user_reset_tokens[user_id]
         user_turn_counters[user_id] += 1
         turn_id = user_turn_counters[user_id]
@@ -945,9 +1054,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
-                current_history = conversations.get(user_id, [])
+                current_history = get_session_history(user_id, active_session)
                 updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
-                conversations[user_id] = updated_history[-MAX_HISTORY:]
+                ensure_user_sessions(user_id)[active_session] = updated_history[-MAX_HISTORY:]
                 save_bot_state()
             finally:
                 user_next_turn_to_finalize[user_id] = turn_id + 1
@@ -1009,6 +1118,7 @@ def main():
     app.add_handler(CommandHandler("preset", preset_command))
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
+    app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("version", version_command))

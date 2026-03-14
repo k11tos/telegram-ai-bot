@@ -29,6 +29,7 @@ class FakeMessage:
 @pytest.fixture(autouse=True)
 def clear_bot_state():
     bot.conversations.clear()
+    bot.user_active_sessions.clear()
     bot.user_locks.clear()
     bot.user_reset_tokens.clear()
     bot.user_turn_counters.clear()
@@ -39,6 +40,7 @@ def clear_bot_state():
     bot.user_selected_presets.clear()
     yield
     bot.conversations.clear()
+    bot.user_active_sessions.clear()
     bot.user_locks.clear()
     bot.user_reset_tokens.clear()
     bot.user_turn_counters.clear()

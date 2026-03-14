@@ -8,14 +8,14 @@ import bot
 
 def test_reset_command_clears_conversation_and_replies(make_update_context):
     user_id = 42
-    bot.conversations[user_id] = ["User: hi", "AI: hello"]
+    bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = ["User: hi", "AI: hello"]
     bot.user_reset_tokens[user_id] = 7
 
     update, context = make_update_context(user_id=user_id, text="/reset", client=None)
 
     asyncio.run(bot.reset(update, context))
 
-    assert bot.conversations[user_id] == []
+    assert bot.get_session_history(user_id) == []
     assert bot.user_reset_tokens[user_id] == 8
     assert update.message.replies == ["대화 기록을 초기화했습니다."]
 
@@ -34,6 +34,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/status" in reply
     assert "/version" in reply
     assert "/health" in reply
+    assert "/session" in reply
 
 
 def test_build_version_message_includes_app_and_commit(monkeypatch):
@@ -346,6 +347,37 @@ def test_preset_command_normalizes_selected_preset_value(make_update_context):
     assert update.message.replies[-1] == "현재 프리셋: coder"
 
 
+def test_session_command_shows_current_default_session(make_update_context):
+    update, context = make_update_context(text="/session", client=None)
+
+    asyncio.run(bot.session_command(update, context))
+
+    assert update.message.replies[-1] == "현재 세션: default"
+
+
+def test_session_command_switches_session(make_update_context):
+    user_id = 321
+    update, context = make_update_context(user_id=user_id, text="/session work", client=None, args=["work"])
+
+    asyncio.run(bot.session_command(update, context))
+
+    assert bot.user_active_sessions[user_id] == "work"
+    assert bot.get_session_history(user_id, "work") == []
+    assert update.message.replies[-1] == "세션 변경: work"
+
+
+def test_session_command_switches_to_trimmed_name(make_update_context):
+    user_id = 322
+    long_name = "x" * 50
+    update, context = make_update_context(user_id=user_id, text=f"/session {long_name}", client=None, args=[long_name])
+
+    asyncio.run(bot.session_command(update, context))
+
+    assert bot.user_active_sessions[user_id] == "x" * 32
+    assert update.message.replies[-1] == f"세션 변경: {'x' * 32}"
+
+
+
 class FakeGetResponse:
     def __init__(self, payload=None, status_error=None, json_error=None):
         self._payload = payload
@@ -482,7 +514,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
     monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
 
-    bot.conversations[10] = ["User: hi", "AI: hello"]
+    bot.ensure_user_sessions(10)[bot.DEFAULT_SESSION_NAME] = ["User: hi", "AI: hello"]
     bot.user_selected_models[10] = "gpt-4o-mini"
     bot.user_selected_presets[10] = "coder"
 
@@ -491,7 +523,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     assert state_path.exists()
     payload = state_path.read_text(encoding="utf-8")
     assert '"version":1' in payload
-    assert '"conversations":{"10":["User: hi","AI: hello"]}' in payload
+    assert '"conversations":{"10":{"default":["User: hi","AI: hello"]}}' in payload
     assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
     assert '"selected_presets":{"10":"coder"}' in payload
 
@@ -501,7 +533,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "bot_state.json"
     state_path.write_text(
-        '{"version":1,"conversations":{"123":["User: a","AI: b"]},'
+        '{"version":1,"conversations":{"123":{"default":["User: a","AI: b"]}},"active_sessions":{"123":"default"},'
         '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"}}',
         encoding="utf-8",
     )
@@ -510,7 +542,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
 
     bot.load_bot_state()
 
-    assert bot.conversations[123] == ["User: a", "AI: b"]
+    assert bot.get_session_history(123) == ["User: a", "AI: b"]
     assert bot.user_selected_models[123] == "gpt-4o-mini"
     assert bot.user_selected_presets[123] == "english"
 
@@ -582,13 +614,13 @@ def test_load_bot_state_replaces_existing_state_instead_of_merging(tmp_path, mon
     )
     monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
 
-    bot.conversations[1] = ["User: stale", "AI: stale"]
+    bot.ensure_user_sessions(1)[bot.DEFAULT_SESSION_NAME] = ["User: stale", "AI: stale"]
     bot.user_selected_models[1] = "stale-model"
     bot.user_selected_presets[1] = "coder"
 
     bot.load_bot_state()
 
-    assert bot.conversations == {2: ["User: new", "AI: value"]}
+    assert bot.conversations == {2: {bot.DEFAULT_SESSION_NAME: ["User: new", "AI: value"]}}
     assert bot.user_selected_models == {2: "new-model"}
     assert bot.user_selected_presets == {2: "english"}
 
@@ -600,7 +632,7 @@ def test_load_bot_state_invalid_root_replaces_with_empty_state(tmp_path, monkeyp
     state_path.write_text('["not-a-dict"]', encoding="utf-8")
     monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
 
-    bot.conversations[1] = ["User: stale"]
+    bot.ensure_user_sessions(1)[bot.DEFAULT_SESSION_NAME] = ["User: stale"]
     bot.user_selected_models[1] = "stale"
     bot.user_selected_presets[1] = "coder"
 
@@ -625,7 +657,7 @@ def test_load_bot_state_trims_and_filters_history_entries(tmp_path, monkeypatch)
 
     bot.load_bot_state()
 
-    assert bot.conversations[3] == valid_lines[-bot.MAX_HISTORY :]
+    assert bot.get_session_history(3) == valid_lines[-bot.MAX_HISTORY :]
 
 
 def test_load_bot_state_ignores_invalid_presets_and_strips_model_values(tmp_path, monkeypatch):
@@ -653,21 +685,21 @@ def test_load_bot_state_is_deterministic_across_repeated_calls(tmp_path, monkeyp
 
     state_path.write_text('{"conversations":{"1":["User: a"]}}', encoding="utf-8")
     bot.load_bot_state()
-    assert bot.conversations == {1: ["User: a"]}
+    assert bot.conversations == {1: {bot.DEFAULT_SESSION_NAME: ["User: a"]}}
 
     state_path.write_text('{"conversations":{"2":["User: b"]}}', encoding="utf-8")
     bot.load_bot_state()
-    assert bot.conversations == {2: ["User: b"]}
+    assert bot.conversations == {2: {bot.DEFAULT_SESSION_NAME: ["User: b"]}}
 
     bot.load_bot_state()
-    assert bot.conversations == {2: ["User: b"]}
+    assert bot.conversations == {2: {bot.DEFAULT_SESSION_NAME: ["User: b"]}}
 
 
 def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatch):
     missing_path = tmp_path / "state" / "bot_state.json"
     monkeypatch.setattr(bot, "STATE_FILE_PATH", str(missing_path))
 
-    bot.conversations[1] = ["User: stale"]
+    bot.ensure_user_sessions(1)[bot.DEFAULT_SESSION_NAME] = ["User: stale"]
     bot.user_selected_models[1] = "stale"
     bot.user_selected_presets[1] = "coder"
 
