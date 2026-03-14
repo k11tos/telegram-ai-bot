@@ -89,9 +89,9 @@ SUPPORTED_PRESETS = ("normal", "coder", "english", "quant")
 DEFAULT_PRESET = "normal"
 PRESET_PROMPT_PREFIXES = {
     "normal": "",
-    "coder": "Assistant role preset: coder. Prioritize practical code-focused answers.",
-    "english": "Assistant role preset: english. Reply in English unless the user asks otherwise.",
-    "quant": "Assistant role preset: quant. Focus on quantitative analysis and clear assumptions.",
+    "coder": "Preset: coder. Focus on practical coding help.",
+    "english": "Preset: english. Reply in English unless asked otherwise.",
+    "quant": "Preset: quant. Prefer quantitative reasoning and clear assumptions.",
 }
 
 if set(PRESET_PROMPT_PREFIXES.keys()) != set(SUPPORTED_PRESETS):
