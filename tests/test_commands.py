@@ -28,6 +28,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "사용 가능한 명령어" in reply
     assert "/help" in reply
     assert "/model" in reply
+    assert "/preset" in reply
     assert "/reset" in reply
     assert "/status" in reply
 
@@ -164,6 +165,24 @@ def test_model_command_resets_selected_model_with_mixed_case_alias(make_update_c
 
     assert bot.user_selected_models.get(user_id) is None
     assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+
+
+def test_preset_command_shows_default_when_unset(make_update_context):
+    update, context = make_update_context(text="/preset", client=None)
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert update.message.replies[-1] == "현재 프리셋: normal"
+
+
+def test_preset_command_shows_selected_preset(make_update_context):
+    user_id = 93
+    bot.user_selected_presets[user_id] = "coder"
+    update, context = make_update_context(user_id=user_id, text="/preset", client=None)
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert update.message.replies[-1] == "현재 프리셋: coder"
 
 
 class FakeGetResponse:
