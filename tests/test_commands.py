@@ -473,3 +473,98 @@ def test_main_registers_health_command_handler(monkeypatch):
     assert len(health_handlers) == 1
     assert health_handlers[0].callback == bot.health_command
     assert fake_builder.app.run_polling_called is True
+
+
+def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_path = state_dir / "bot_state.json"
+    monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.conversations[10] = ["User: hi", "AI: hello"]
+    bot.user_selected_models[10] = "gpt-4o-mini"
+    bot.user_selected_presets[10] = "coder"
+
+    bot.save_bot_state()
+
+    assert state_path.exists()
+    payload = state_path.read_text(encoding="utf-8")
+    assert '"version":1' in payload
+    assert '"conversations":{"10":["User: hi","AI: hello"]}' in payload
+    assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
+    assert '"selected_presets":{"10":"coder"}' in payload
+
+
+def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"version":1,"conversations":{"123":["User: a","AI: b"]},'
+        '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.conversations[123] == ["User: a", "AI: b"]
+    assert bot.user_selected_models[123] == "gpt-4o-mini"
+    assert bot.user_selected_presets[123] == "english"
+
+
+def test_load_bot_state_ignores_malformed_json(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text("{bad json", encoding="utf-8")
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {}
+    assert bot.user_selected_models == {}
+    assert bot.user_selected_presets == {}
+
+
+def test_main_loads_state_before_running(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.handlers = []
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+        def run_polling(self):
+            return None
+
+    class FakeBuilder:
+        def __init__(self):
+            self.app = FakeApp()
+
+        def token(self, value):
+            return self
+
+        def post_init(self, callback):
+            return self
+
+        def post_shutdown(self, callback):
+            return self
+
+        def build(self):
+            return self.app
+
+    called = {"load": False}
+
+    def fake_load():
+        called["load"] = True
+
+    monkeypatch.setattr(bot, "BOT_TOKEN", "dummy-token")
+    monkeypatch.setattr(bot, "AI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setattr(bot, "ApplicationBuilder", lambda: FakeBuilder())
+    monkeypatch.setattr(bot, "load_bot_state", fake_load)
+
+    bot.main()
+
+    assert called["load"] is True
