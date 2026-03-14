@@ -89,8 +89,34 @@ HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
     "/reset - 대화 기록 초기화",
+    "/status - 봇 상태 확인",
 ]
 HELP_MESSAGE = "\n".join(HELP_LINES)
+
+
+def build_status_message(context: ContextTypes.DEFAULT_TYPE) -> str:
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    client_status = "초기화됨" if client is not None else "미초기화"
+
+    lines = [
+        "봇 상태 요약",
+        "- 서비스 상태: 실행 중",
+        f"- AI 게이트웨이: {AI_GATEWAY_BASE_URL or '미설정'}",
+        (
+            "- HTTP 타임아웃(초): "
+            f"connect={HTTP_TIMEOUT_CONFIG['connect']}, "
+            f"read={HTTP_TIMEOUT_CONFIG['read']}, "
+            f"write={HTTP_TIMEOUT_CONFIG['write']}, "
+            f"pool={HTTP_TIMEOUT_CONFIG['pool']}"
+        ),
+        f"- HTTP 클라이언트: {client_status}",
+        "- 기본 동작: 사용자별 모델 미선택 시 게이트웨이 기본 모델을 사용",
+    ]
+
+    if client is None:
+        lines.append("- 안내: AI 호출용 클라이언트가 아직 준비되지 않았습니다.")
+
+    return "\n".join(lines)
 
 
 def fit_telegram_text(text: str) -> str:
@@ -203,6 +229,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_MESSAGE)
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(build_status_message(context))
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -551,6 +581,7 @@ def main():
 
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("status", status_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling()
