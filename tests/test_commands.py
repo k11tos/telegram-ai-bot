@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 
@@ -568,3 +569,110 @@ def test_main_loads_state_before_running(monkeypatch):
     bot.main()
 
     assert called["load"] is True
+
+
+def test_load_bot_state_replaces_existing_state_instead_of_merging(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"version":1,"conversations":{"2":["User: new","AI: value"]},'
+        '"selected_models":{"2":" new-model "},"selected_presets":{"2":"english"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.conversations[1] = ["User: stale", "AI: stale"]
+    bot.user_selected_models[1] = "stale-model"
+    bot.user_selected_presets[1] = "coder"
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {2: ["User: new", "AI: value"]}
+    assert bot.user_selected_models == {2: "new-model"}
+    assert bot.user_selected_presets == {2: "english"}
+
+
+def test_load_bot_state_invalid_root_replaces_with_empty_state(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text('["not-a-dict"]', encoding="utf-8")
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.conversations[1] = ["User: stale"]
+    bot.user_selected_models[1] = "stale"
+    bot.user_selected_presets[1] = "coder"
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {}
+    assert bot.user_selected_models == {}
+    assert bot.user_selected_presets == {}
+
+
+def test_load_bot_state_trims_and_filters_history_entries(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    valid_lines = [f"line-{index}" for index in range(bot.MAX_HISTORY + 2)]
+    mixed_history = [valid_lines[0], None, 1, valid_lines[1], *valid_lines[2:]]
+    state_path.write_text(
+        json.dumps({"conversations": {"3": mixed_history}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.conversations[3] == valid_lines[-bot.MAX_HISTORY :]
+
+
+def test_load_bot_state_ignores_invalid_presets_and_strips_model_values(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"selected_models":{"1":"  gpt-4o-mini  ","2":"   "},'
+        '"selected_presets":{"1":"NOT_SUPPORTED","2":" Coder "}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.user_selected_models == {1: "gpt-4o-mini"}
+    assert bot.user_selected_presets == {2: "coder"}
+
+
+def test_load_bot_state_is_deterministic_across_repeated_calls(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    state_path.write_text('{"conversations":{"1":["User: a"]}}', encoding="utf-8")
+    bot.load_bot_state()
+    assert bot.conversations == {1: ["User: a"]}
+
+    state_path.write_text('{"conversations":{"2":["User: b"]}}', encoding="utf-8")
+    bot.load_bot_state()
+    assert bot.conversations == {2: ["User: b"]}
+
+    bot.load_bot_state()
+    assert bot.conversations == {2: ["User: b"]}
+
+
+def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatch):
+    missing_path = tmp_path / "state" / "bot_state.json"
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(missing_path))
+
+    bot.conversations[1] = ["User: stale"]
+    bot.user_selected_models[1] = "stale"
+    bot.user_selected_presets[1] = "coder"
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {}
+    assert bot.user_selected_models == {}
+    assert bot.user_selected_presets == {}

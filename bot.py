@@ -159,47 +159,55 @@ def save_bot_state() -> None:
 
 
 def load_bot_state() -> None:
+    loaded_conversations: dict[int, list[str]] = {}
+    loaded_models: dict[int, str] = {}
+    loaded_presets: dict[int, str] = {}
+
     if not os.path.exists(STATE_FILE_PATH):
         logger.info("state_file_missing path=%s", STATE_FILE_PATH)
-        return
+    else:
+        try:
+            with open(STATE_FILE_PATH, "r", encoding="utf-8") as state_file:
+                payload = json.load(state_file)
+        except (OSError, json.JSONDecodeError) as error:
+            logger.warning("state_load_failed path=%s error=%s", STATE_FILE_PATH, error)
+        else:
+            if not isinstance(payload, dict):
+                logger.warning("state_load_invalid_root path=%s", STATE_FILE_PATH)
+            else:
+                raw_conversations = payload.get("conversations", {})
+                if isinstance(raw_conversations, dict):
+                    normalized_conversations = _normalize_int_key_mapping(raw_conversations)
+                    for user_id, history in normalized_conversations.items():
+                        if not isinstance(history, list):
+                            continue
+                        cleaned_history = [line for line in history if isinstance(line, str)]
+                        if cleaned_history:
+                            loaded_conversations[user_id] = cleaned_history[-MAX_HISTORY:]
 
-    try:
-        with open(STATE_FILE_PATH, "r", encoding="utf-8") as state_file:
-            payload = json.load(state_file)
-    except (OSError, json.JSONDecodeError) as error:
-        logger.warning("state_load_failed path=%s error=%s", STATE_FILE_PATH, error)
-        return
+                raw_models = payload.get("selected_models", {})
+                if isinstance(raw_models, dict):
+                    normalized_models = _normalize_int_key_mapping(raw_models)
+                    for user_id, model in normalized_models.items():
+                        if isinstance(model, str) and model.strip():
+                            loaded_models[user_id] = model.strip()
 
-    if not isinstance(payload, dict):
-        logger.warning("state_load_invalid_root path=%s", STATE_FILE_PATH)
-        return
+                raw_presets = payload.get("selected_presets", {})
+                if isinstance(raw_presets, dict):
+                    normalized_presets = _normalize_int_key_mapping(raw_presets)
+                    for user_id, preset in normalized_presets.items():
+                        if not isinstance(preset, str):
+                            continue
+                        normalized_preset = preset.strip().lower()
+                        if normalized_preset in SUPPORTED_PRESETS:
+                            loaded_presets[user_id] = normalized_preset
 
-    raw_conversations = payload.get("conversations", {})
-    if isinstance(raw_conversations, dict):
-        normalized_conversations = _normalize_int_key_mapping(raw_conversations)
-        for user_id, history in normalized_conversations.items():
-            if not isinstance(history, list):
-                continue
-            cleaned_history = [line for line in history if isinstance(line, str)]
-            if cleaned_history:
-                conversations[user_id] = cleaned_history[-MAX_HISTORY:]
-
-    raw_models = payload.get("selected_models", {})
-    if isinstance(raw_models, dict):
-        normalized_models = _normalize_int_key_mapping(raw_models)
-        for user_id, model in normalized_models.items():
-            if isinstance(model, str) and model.strip():
-                user_selected_models[user_id] = model.strip()
-
-    raw_presets = payload.get("selected_presets", {})
-    if isinstance(raw_presets, dict):
-        normalized_presets = _normalize_int_key_mapping(raw_presets)
-        for user_id, preset in normalized_presets.items():
-            if not isinstance(preset, str):
-                continue
-            normalized_preset = preset.strip().lower()
-            if normalized_preset in SUPPORTED_PRESETS:
-                user_selected_presets[user_id] = normalized_preset
+    conversations.clear()
+    conversations.update(loaded_conversations)
+    user_selected_models.clear()
+    user_selected_models.update(loaded_models)
+    user_selected_presets.clear()
+    user_selected_presets.update(loaded_presets)
 
 
 def sanitize_version_value(value: str, max_length: int = 64) -> str:
