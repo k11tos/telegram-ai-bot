@@ -86,6 +86,10 @@ user_selected_models = {}
 user_selected_presets = {}
 MODEL_RESET_ALIASES = {"default", "reset"}
 
+LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
+STATE_FILE_NAME = "bot_state.json"
+STATE_FILE_PATH = os.path.join(LOCAL_DATA_DIR, STATE_FILE_NAME)
+
 SUPPORTED_PRESETS = ("normal", "coder", "english", "quant")
 DEFAULT_PRESET = "normal"
 PRESET_PROMPT_PREFIXES = {
@@ -117,6 +121,93 @@ HELP_MESSAGE = "\n".join(HELP_LINES)
 
 VERSION_ENV_KEYS = ("APP_VERSION", "VERSION")
 COMMIT_ENV_KEYS = ("GIT_COMMIT_SHA", "COMMIT_SHA", "GITHUB_SHA")
+
+
+def _normalize_int_key_mapping(source: dict) -> dict[int, object]:
+    normalized: dict[int, object] = {}
+    for key, value in source.items():
+        try:
+            normalized[int(key)] = value
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
+def build_state_payload() -> dict[str, object]:
+    return {
+        "version": 1,
+        "conversations": {str(user_id): history for user_id, history in conversations.items()},
+        "selected_models": {
+            str(user_id): model for user_id, model in user_selected_models.items()
+        },
+        "selected_presets": {
+            str(user_id): preset for user_id, preset in user_selected_presets.items()
+        },
+    }
+
+
+def save_bot_state() -> None:
+    try:
+        os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+        payload = build_state_payload()
+        temp_path = f"{STATE_FILE_PATH}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as state_file:
+            json.dump(payload, state_file, ensure_ascii=False, separators=(",", ":"))
+        os.replace(temp_path, STATE_FILE_PATH)
+    except OSError as error:
+        logger.warning("state_save_failed path=%s error=%s", STATE_FILE_PATH, error)
+
+
+def load_bot_state() -> None:
+    loaded_conversations: dict[int, list[str]] = {}
+    loaded_models: dict[int, str] = {}
+    loaded_presets: dict[int, str] = {}
+
+    if not os.path.exists(STATE_FILE_PATH):
+        logger.info("state_file_missing path=%s", STATE_FILE_PATH)
+    else:
+        try:
+            with open(STATE_FILE_PATH, "r", encoding="utf-8") as state_file:
+                payload = json.load(state_file)
+        except (OSError, json.JSONDecodeError) as error:
+            logger.warning("state_load_failed path=%s error=%s", STATE_FILE_PATH, error)
+        else:
+            if not isinstance(payload, dict):
+                logger.warning("state_load_invalid_root path=%s", STATE_FILE_PATH)
+            else:
+                raw_conversations = payload.get("conversations", {})
+                if isinstance(raw_conversations, dict):
+                    normalized_conversations = _normalize_int_key_mapping(raw_conversations)
+                    for user_id, history in normalized_conversations.items():
+                        if not isinstance(history, list):
+                            continue
+                        cleaned_history = [line for line in history if isinstance(line, str)]
+                        if cleaned_history:
+                            loaded_conversations[user_id] = cleaned_history[-MAX_HISTORY:]
+
+                raw_models = payload.get("selected_models", {})
+                if isinstance(raw_models, dict):
+                    normalized_models = _normalize_int_key_mapping(raw_models)
+                    for user_id, model in normalized_models.items():
+                        if isinstance(model, str) and model.strip():
+                            loaded_models[user_id] = model.strip()
+
+                raw_presets = payload.get("selected_presets", {})
+                if isinstance(raw_presets, dict):
+                    normalized_presets = _normalize_int_key_mapping(raw_presets)
+                    for user_id, preset in normalized_presets.items():
+                        if not isinstance(preset, str):
+                            continue
+                        normalized_preset = preset.strip().lower()
+                        if normalized_preset in SUPPORTED_PRESETS:
+                            loaded_presets[user_id] = normalized_preset
+
+    conversations.clear()
+    conversations.update(loaded_conversations)
+    user_selected_models.clear()
+    user_selected_models.update(loaded_models)
+    user_selected_presets.clear()
+    user_selected_presets.update(loaded_presets)
 
 
 def sanitize_version_value(value: str, max_length: int = 64) -> str:
@@ -331,6 +422,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         conversations[user_id] = []
         user_reset_tokens[user_id] = user_reset_tokens.get(user_id, 0) + 1
+        save_bot_state()
     await update.message.reply_text("대화 기록을 초기화했습니다.")
 
 
@@ -405,6 +497,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lock = get_user_lock(user_id)
         async with lock:
             user_selected_models.pop(user_id, None)
+            save_bot_state()
         await update.message.reply_text("모델 설정을 초기화했습니다. 기본 모델을 사용합니다.")
         return
 
@@ -448,6 +541,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lock = get_user_lock(user_id)
     async with lock:
         user_selected_models[user_id] = requested_model
+        save_bot_state()
 
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
     logger.info(
@@ -472,6 +566,7 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lock = get_user_lock(user_id)
         async with lock:
             user_selected_presets[user_id] = requested_preset
+            save_bot_state()
         await update.message.reply_text(f"프리셋이 변경되었습니다: {requested_preset}")
         return
 
@@ -853,6 +948,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 current_history = conversations.get(user_id, [])
                 updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
                 conversations[user_id] = updated_history[-MAX_HISTORY:]
+                save_bot_state()
             finally:
                 user_next_turn_to_finalize[user_id] = turn_id + 1
                 finalize_condition.notify_all()
@@ -897,6 +993,8 @@ def main():
         raise ValueError("BOT_TOKEN이 설정되지 않았습니다.")
     if not AI_GATEWAY_BASE_URL:
         raise ValueError("AI_GATEWAY_BASE_URL이 설정되지 않았습니다.")
+
+    load_bot_state()
 
     app = (
         ApplicationBuilder()

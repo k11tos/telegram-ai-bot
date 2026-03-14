@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 
@@ -473,3 +474,205 @@ def test_main_registers_health_command_handler(monkeypatch):
     assert len(health_handlers) == 1
     assert health_handlers[0].callback == bot.health_command
     assert fake_builder.app.run_polling_called is True
+
+
+def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_path = state_dir / "bot_state.json"
+    monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.conversations[10] = ["User: hi", "AI: hello"]
+    bot.user_selected_models[10] = "gpt-4o-mini"
+    bot.user_selected_presets[10] = "coder"
+
+    bot.save_bot_state()
+
+    assert state_path.exists()
+    payload = state_path.read_text(encoding="utf-8")
+    assert '"version":1' in payload
+    assert '"conversations":{"10":["User: hi","AI: hello"]}' in payload
+    assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
+    assert '"selected_presets":{"10":"coder"}' in payload
+
+
+def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"version":1,"conversations":{"123":["User: a","AI: b"]},'
+        '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.conversations[123] == ["User: a", "AI: b"]
+    assert bot.user_selected_models[123] == "gpt-4o-mini"
+    assert bot.user_selected_presets[123] == "english"
+
+
+def test_load_bot_state_ignores_malformed_json(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text("{bad json", encoding="utf-8")
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {}
+    assert bot.user_selected_models == {}
+    assert bot.user_selected_presets == {}
+
+
+def test_main_loads_state_before_running(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.handlers = []
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+        def run_polling(self):
+            return None
+
+    class FakeBuilder:
+        def __init__(self):
+            self.app = FakeApp()
+
+        def token(self, value):
+            return self
+
+        def post_init(self, callback):
+            return self
+
+        def post_shutdown(self, callback):
+            return self
+
+        def build(self):
+            return self.app
+
+    called = {"load": False}
+
+    def fake_load():
+        called["load"] = True
+
+    monkeypatch.setattr(bot, "BOT_TOKEN", "dummy-token")
+    monkeypatch.setattr(bot, "AI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setattr(bot, "ApplicationBuilder", lambda: FakeBuilder())
+    monkeypatch.setattr(bot, "load_bot_state", fake_load)
+
+    bot.main()
+
+    assert called["load"] is True
+
+
+def test_load_bot_state_replaces_existing_state_instead_of_merging(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"version":1,"conversations":{"2":["User: new","AI: value"]},'
+        '"selected_models":{"2":" new-model "},"selected_presets":{"2":"english"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.conversations[1] = ["User: stale", "AI: stale"]
+    bot.user_selected_models[1] = "stale-model"
+    bot.user_selected_presets[1] = "coder"
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {2: ["User: new", "AI: value"]}
+    assert bot.user_selected_models == {2: "new-model"}
+    assert bot.user_selected_presets == {2: "english"}
+
+
+def test_load_bot_state_invalid_root_replaces_with_empty_state(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text('["not-a-dict"]', encoding="utf-8")
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.conversations[1] = ["User: stale"]
+    bot.user_selected_models[1] = "stale"
+    bot.user_selected_presets[1] = "coder"
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {}
+    assert bot.user_selected_models == {}
+    assert bot.user_selected_presets == {}
+
+
+def test_load_bot_state_trims_and_filters_history_entries(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    valid_lines = [f"line-{index}" for index in range(bot.MAX_HISTORY + 2)]
+    mixed_history = [valid_lines[0], None, 1, valid_lines[1], *valid_lines[2:]]
+    state_path.write_text(
+        json.dumps({"conversations": {"3": mixed_history}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.conversations[3] == valid_lines[-bot.MAX_HISTORY :]
+
+
+def test_load_bot_state_ignores_invalid_presets_and_strips_model_values(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"selected_models":{"1":"  gpt-4o-mini  ","2":"   "},'
+        '"selected_presets":{"1":"NOT_SUPPORTED","2":" Coder "}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.user_selected_models == {1: "gpt-4o-mini"}
+    assert bot.user_selected_presets == {2: "coder"}
+
+
+def test_load_bot_state_is_deterministic_across_repeated_calls(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    state_path.write_text('{"conversations":{"1":["User: a"]}}', encoding="utf-8")
+    bot.load_bot_state()
+    assert bot.conversations == {1: ["User: a"]}
+
+    state_path.write_text('{"conversations":{"2":["User: b"]}}', encoding="utf-8")
+    bot.load_bot_state()
+    assert bot.conversations == {2: ["User: b"]}
+
+    bot.load_bot_state()
+    assert bot.conversations == {2: ["User: b"]}
+
+
+def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatch):
+    missing_path = tmp_path / "state" / "bot_state.json"
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(missing_path))
+
+    bot.conversations[1] = ["User: stale"]
+    bot.user_selected_models[1] = "stale"
+    bot.user_selected_presets[1] = "coder"
+
+    bot.load_bot_state()
+
+    assert bot.conversations == {}
+    assert bot.user_selected_models == {}
+    assert bot.user_selected_presets == {}
