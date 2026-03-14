@@ -82,6 +82,7 @@ user_next_turn_to_finalize = {}
 user_finalize_conditions = {}
 user_in_flight_requests = {}
 user_selected_models = {}
+MODEL_RESET_ALIASES = {"default", "reset"}
 
 MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
@@ -268,6 +269,13 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await update.message.reply_text("현재 모델: 기본 모델 사용")
+        return
+
+    if requested_model.lower() in MODEL_RESET_ALIASES:
+        lock = get_user_lock(user_id)
+        async with lock:
+            user_selected_models.pop(user_id, None)
+        await update.message.reply_text("모델 설정을 초기화했습니다. 기본 모델을 사용합니다.")
         return
 
     client = context.application.bot_data.get(HTTP_CLIENT_KEY)
