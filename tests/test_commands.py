@@ -31,6 +31,41 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/preset" in reply
     assert "/reset" in reply
     assert "/status" in reply
+    assert "/version" in reply
+
+
+def test_build_version_message_includes_app_and_commit(monkeypatch):
+    monkeypatch.setenv("APP_VERSION", "1.2.3")
+    monkeypatch.setenv("GIT_COMMIT_SHA", "abcdef1234567890")
+
+    assert bot.build_version_message() == "version: app=1.2.3 commit=abcdef1"
+
+
+def test_build_version_message_uses_fallback_when_unset(monkeypatch):
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    monkeypatch.delenv("VERSION", raising=False)
+    monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
+    monkeypatch.delenv("COMMIT_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+
+    assert bot.build_version_message() == "version: version info unavailable"
+
+
+def test_build_version_message_sanitizes_env_values(monkeypatch):
+    monkeypatch.setenv("VERSION", " release/v1.0.0 ")
+    monkeypatch.setenv("GITHUB_SHA", "abc123456!@#")
+
+    assert bot.build_version_message() == "version: app=releasev1.0.0 commit=abc1234"
+
+
+def test_version_command_replies_with_version_summary(make_update_context, monkeypatch):
+    monkeypatch.setenv("APP_VERSION", "2.0.0")
+    monkeypatch.setenv("GIT_COMMIT_SHA", "1234567890abcdef")
+    update, context = make_update_context(text="/version", client=None)
+
+    asyncio.run(bot.version_command(update, context))
+
+    assert update.message.replies[-1] == "version: app=2.0.0 commit=1234567"
 
 
 def test_status_command_shows_korean_summary_without_secrets(make_update_context):

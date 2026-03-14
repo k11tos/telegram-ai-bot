@@ -109,8 +109,53 @@ HELP_LINES = [
     "/models - 사용 가능한 모델 목록",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
+    "/version - 실행 버전 정보 확인",
 ]
 HELP_MESSAGE = "\n".join(HELP_LINES)
+
+VERSION_ENV_KEYS = ("APP_VERSION", "VERSION")
+COMMIT_ENV_KEYS = ("GIT_COMMIT_SHA", "COMMIT_SHA", "GITHUB_SHA")
+
+
+def sanitize_version_value(value: str, max_length: int = 64) -> str:
+    normalized = value.strip()
+    if not normalized:
+        return ""
+
+    safe_value = re.sub(r"[^A-Za-z0-9._-]", "", normalized)
+    if not safe_value:
+        return ""
+
+    return safe_value[:max_length]
+
+
+def first_sanitized_env(keys: tuple[str, ...], max_length: int = 64) -> str | None:
+    for key in keys:
+        raw_value = os.getenv(key)
+        if not raw_value:
+            continue
+
+        sanitized = sanitize_version_value(raw_value, max_length=max_length)
+        if sanitized:
+            return sanitized
+
+    return None
+
+
+def build_version_message() -> str:
+    app_version = first_sanitized_env(VERSION_ENV_KEYS)
+    commit_sha = first_sanitized_env(COMMIT_ENV_KEYS, max_length=40)
+
+    version_parts = []
+    if app_version:
+        version_parts.append(f"app={app_version}")
+    if commit_sha:
+        version_parts.append(f"commit={commit_sha[:7]}")
+
+    if not version_parts:
+        return "version: version info unavailable"
+
+    return "version: " + " ".join(version_parts)
 
 
 def build_status_message(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -293,6 +338,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(build_status_message(context))
+
+
+async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(build_version_message())
 
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -821,6 +870,7 @@ def main():
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("version", version_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling()
