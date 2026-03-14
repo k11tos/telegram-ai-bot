@@ -27,6 +27,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     reply = update.message.replies[0]
     assert "사용 가능한 명령어" in reply
     assert "/help" in reply
+    assert "/model" in reply
     assert "/reset" in reply
     assert "/status" in reply
 
@@ -69,6 +70,24 @@ def test_help_command_includes_models_command(make_update_context):
 
     reply = update.message.replies[0]
     assert "/models" in reply
+
+
+def test_model_command_shows_selected_model(make_update_context):
+    user_id = 52
+    bot.user_selected_models[user_id] = "gpt-4o-mini"
+    update, context = make_update_context(user_id=user_id, text="/model", client=None)
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert update.message.replies[-1] == "현재 모델: gpt-4o-mini"
+
+
+def test_model_command_shows_default_behavior_when_unset(make_update_context):
+    update, context = make_update_context(text="/model", client=None)
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert update.message.replies[-1] == "현재 모델: 기본 모델 사용"
 
 
 class FakeGetResponse:

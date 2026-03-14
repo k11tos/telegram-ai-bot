@@ -90,6 +90,7 @@ STREAM_EDIT_INTERVAL_SEC = 1.0
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
+    "/model - 현재 적용 중인 모델 확인",
     "/models - 사용 가능한 모델 목록",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
@@ -252,6 +253,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(build_status_message(context))
+
+
+async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    selected_model = get_user_selected_model(user_id)
+
+    if selected_model:
+        await update.message.reply_text(f"현재 모델: {selected_model}")
+        return
+
+    await update.message.reply_text("현재 모델: 기본 모델 사용")
 
 
 def extract_model_names(payload) -> list[str]:
@@ -681,6 +693,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("model", model_command))
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
