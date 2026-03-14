@@ -282,3 +282,42 @@ def test_empty_user_input_still_constructs_deterministic_prompt(make_update_cont
 
     assert client.stream_calls[0]["json"] == {"prompt": "User: \nAI:"}
     assert bot.conversations[123] == ["User: ", "AI: 빈 입력 응답"]
+
+
+def test_selected_model_is_included_in_gateway_payloads(make_update_context):
+    user_id = 222
+    bot.user_selected_models[user_id] = "gpt-4o-mini"
+    request = httpx.Request("POST", "http://test/chat")
+    client = FakeClient(
+        stream_error=httpx.RequestError("stream failed", request=request),
+        post_payload={"response": "모델 응답"},
+    )
+    update, context = make_update_context(user_id=user_id, text="모델 질문", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    expected_payload = {"prompt": "User: 모델 질문\nAI:", "model": "gpt-4o-mini"}
+    assert client.stream_calls[0]["json"] == expected_payload
+    assert client.post_calls[0]["json"] == expected_payload
+
+
+def test_empty_selected_model_falls_back_to_default_gateway_behavior(make_update_context):
+    user_id = 223
+    bot.user_selected_models[user_id] = ""
+    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '기본 모델 응답'})}", "data: [DONE]"])
+    update, context = make_update_context(user_id=user_id, text="기본 질문", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert client.stream_calls[0]["json"] == {"prompt": "User: 기본 질문\nAI:"}
+
+
+def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_update_context):
+    user_id = 224
+    bot.user_selected_models[user_id] = "   "
+    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '공백 모델 응답'})}", "data: [DONE]"])
+    update, context = make_update_context(user_id=user_id, text="공백 질문", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert client.stream_calls[0]["json"] == {"prompt": "User: 공백 질문\nAI:"}

@@ -35,6 +35,7 @@ def clear_bot_state():
     bot.user_next_turn_to_finalize.clear()
     bot.user_finalize_conditions.clear()
     bot.user_in_flight_requests.clear()
+    bot.user_selected_models.clear()
     yield
     bot.conversations.clear()
     bot.user_locks.clear()
@@ -43,6 +44,7 @@ def clear_bot_state():
     bot.user_next_turn_to_finalize.clear()
     bot.user_finalize_conditions.clear()
     bot.user_in_flight_requests.clear()
+    bot.user_selected_models.clear()
 
 
 @pytest.fixture
