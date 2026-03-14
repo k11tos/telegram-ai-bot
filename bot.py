@@ -82,7 +82,20 @@ user_next_turn_to_finalize = {}
 user_finalize_conditions = {}
 user_in_flight_requests = {}
 user_selected_models = {}
+user_selected_presets = {}
 MODEL_RESET_ALIASES = {"default", "reset"}
+
+SUPPORTED_PRESETS = ("normal", "coder", "english", "quant")
+DEFAULT_PRESET = "normal"
+PRESET_PROMPT_PREFIXES = {
+    "normal": "",
+    "coder": "Assistant role preset: coder. Prioritize practical code-focused answers.",
+    "english": "Assistant role preset: english. Reply in English unless the user asks otherwise.",
+    "quant": "Assistant role preset: quant. Focus on quantitative analysis and clear assumptions.",
+}
+
+if set(PRESET_PROMPT_PREFIXES.keys()) != set(SUPPORTED_PRESETS):
+    raise AssertionError("SUPPORTED_PRESETS and PRESET_PROMPT_PREFIXES keys must match exactly")
 
 MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
@@ -230,6 +243,31 @@ def get_user_selected_model(user_id: int) -> str | None:
 
     normalized_model = selected_model.strip()
     return normalized_model or None
+
+
+def get_user_selected_preset(user_id: int) -> str | None:
+    selected_preset = user_selected_presets.get(user_id)
+    if not isinstance(selected_preset, str):
+        return None
+
+    normalized_preset = selected_preset.strip().lower()
+    if normalized_preset not in SUPPORTED_PRESETS:
+        return None
+
+    return normalized_preset
+
+
+def resolve_active_preset(user_id: int) -> str:
+    return get_user_selected_preset(user_id) or DEFAULT_PRESET
+
+
+def build_prompt_with_preset(history_lines: list[str], active_preset: str) -> str:
+    prompt = "\n".join(history_lines) + "\nAI:"
+    preset_prefix = PRESET_PROMPT_PREFIXES.get(active_preset, "")
+    if not preset_prefix:
+        return prompt
+
+    return f"{preset_prefix}\n\n{prompt}"
 
 
 def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dict[str, str]:
@@ -451,6 +489,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
         selected_model = get_user_selected_model(user_id)
+        active_preset = resolve_active_preset(user_id)
 
     try:
         try:
@@ -469,7 +508,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     finalize_condition.notify_all()
             return
 
-        prompt = "\n".join(new_history) + "\nAI:"
+        prompt = build_prompt_with_preset(new_history, active_preset)
         payload = build_gateway_payload(prompt, selected_model)
         gateway_headers = {"X-Request-Id": request_id}
         client = context.application.bot_data.get(HTTP_CLIENT_KEY)
