@@ -329,6 +329,36 @@ def test_preset_constants_are_defined_centrally():
     assert set(bot.PRESET_PROMPT_PREFIXES.keys()) == set(bot.SUPPORTED_PRESETS)
 
 
+def test_preset_prefix_string_values_are_fixed():
+    assert bot.PRESET_PROMPT_PREFIXES["coder"] == "Preset: coder. Focus on practical coding help."
+    assert bot.PRESET_PROMPT_PREFIXES["english"] == "Preset: english. Reply in English unless asked otherwise."
+    assert bot.PRESET_PROMPT_PREFIXES["quant"] == "Preset: quant. Prefer quantitative reasoning and clear assumptions."
+
+
+def test_build_prompt_with_preset_starts_with_coder_prefix():
+    prompt = bot.build_prompt_with_preset(["User: hi"], "coder")
+
+    assert prompt.startswith(f"{bot.PRESET_PROMPT_PREFIXES['coder']}\n\n")
+
+
+def test_build_prompt_with_preset_starts_with_english_prefix():
+    prompt = bot.build_prompt_with_preset(["User: hi"], "english")
+
+    assert prompt.startswith(f"{bot.PRESET_PROMPT_PREFIXES['english']}\n\n")
+
+
+def test_build_prompt_with_preset_starts_with_quant_prefix():
+    prompt = bot.build_prompt_with_preset(["User: hi"], "quant")
+
+    assert prompt.startswith(f"{bot.PRESET_PROMPT_PREFIXES['quant']}\n\n")
+
+
+def test_build_prompt_with_normal_preset_keeps_existing_prompt_format():
+    prompt = bot.build_prompt_with_preset(["User: hi"], "normal")
+
+    assert prompt == "User: hi\nAI:"
+
+
 def test_handle_message_uses_active_preset_prefix_for_non_default_preset(make_update_context):
     user_id = 808
     bot.user_selected_presets[user_id] = "coder"
