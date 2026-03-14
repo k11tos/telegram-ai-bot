@@ -175,6 +175,51 @@ def test_preset_command_shows_default_when_unset(make_update_context):
     assert update.message.replies[-1] == "현재 프리셋: normal"
 
 
+def test_preset_command_sets_supported_preset(make_update_context):
+    user_id = 96
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/preset english",
+        client=None,
+        args=["english"],
+    )
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert bot.user_selected_presets[user_id] == "english"
+    assert update.message.replies[-1] == "프리셋이 변경되었습니다: english"
+
+
+def test_preset_command_sets_supported_preset_with_case_normalization(make_update_context):
+    user_id = 97
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/preset Coder",
+        client=None,
+        args=["Coder"],
+    )
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert bot.user_selected_presets[user_id] == "coder"
+    assert update.message.replies[-1] == "프리셋이 변경되었습니다: coder"
+
+
+def test_preset_command_rejects_unsupported_preset(make_update_context):
+    user_id = 98
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/preset unknown",
+        client=None,
+        args=["unknown"],
+    )
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert bot.user_selected_presets.get(user_id) is None
+    assert update.message.replies[-1] == "지원하지 않는 프리셋입니다."
+
+
 def test_preset_command_shows_selected_preset(make_update_context):
     user_id = 93
     bot.user_selected_presets[user_id] = "coder"
