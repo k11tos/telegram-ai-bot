@@ -90,6 +90,111 @@ def test_model_command_shows_default_behavior_when_unset(make_update_context):
     assert update.message.replies[-1] == "현재 모델: 기본 모델 사용"
 
 
+def test_model_command_sets_selected_model_when_valid(make_update_context):
+    user_id = 88
+    client = FakeModelsClient(payload={"models": [{"id": "gpt-4o-mini"}, {"id": "claude-3-5"}]})
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/model gpt-4o-mini",
+        client=client,
+        args=["gpt-4o-mini"],
+    )
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["path"] == bot.AI_GATEWAY_MODELS_PATH
+    assert "X-Request-Id" in client.calls[0]["headers"]
+    assert bot.user_selected_models[user_id] == "gpt-4o-mini"
+    assert update.message.replies[-1] == "모델이 변경되었습니다: gpt-4o-mini"
+
+
+def test_model_command_rejects_invalid_model_name(make_update_context):
+    user_id = 89
+    client = FakeModelsClient(payload={"models": [{"id": "gpt-4o-mini"}]})
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/model bad-model",
+        client=client,
+        args=["bad-model"],
+    )
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert bot.user_selected_models.get(user_id) is None
+    assert update.message.replies[-1] == "사용할 수 없는 모델이에요."
+
+
+def test_model_command_handles_missing_client_when_setting(make_update_context):
+    update, context = make_update_context(text="/model gpt-4o-mini", client=None, args=["gpt-4o-mini"])
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert update.message.replies[-1] == "지금은 모델을 변경할 수 없어요."
+
+
+
+
+def test_model_command_resets_selection_with_default_keyword(make_update_context):
+    user_id = 90
+    bot.user_selected_models[user_id] = "gpt-4o-mini"
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/model default",
+        client=None,
+        args=["default"],
+    )
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert bot.user_selected_models.get(user_id) is None
+    assert update.message.replies[-1] == "모델을 기본값으로 되돌렸어요."
+
+
+def test_model_command_resets_selection_with_reset_keyword_case_insensitive(make_update_context):
+    user_id = 91
+    bot.user_selected_models[user_id] = "claude-3-5"
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/model RESET",
+        client=None,
+        args=["RESET"],
+    )
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert bot.user_selected_models.get(user_id) is None
+    assert update.message.replies[-1] == "모델을 기본값으로 되돌렸어요."
+def test_model_command_handles_gateway_request_error(make_update_context):
+    request = httpx.Request("GET", "http://test/models")
+    client = FakeModelsClient(get_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(
+        text="/model gpt-4o-mini",
+        client=client,
+        args=["gpt-4o-mini"],
+    )
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert update.message.replies[-1] == "모델 확인에 실패했어요. 잠시 후 다시 시도해주세요."
+
+
+def test_model_command_handles_gateway_status_error(make_update_context):
+    request = httpx.Request("GET", "http://test/models")
+    response = httpx.Response(503, request=request)
+    status_error = httpx.HTTPStatusError("service unavailable", request=request, response=response)
+    client = FakeModelsClient(status_error=status_error)
+    update, context = make_update_context(
+        text="/model gpt-4o-mini",
+        client=client,
+        args=["gpt-4o-mini"],
+    )
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert update.message.replies[-1] == "모델 확인에 실패했어요. 잠시 후 다시 시도해주세요."
+
+
 class FakeGetResponse:
     def __init__(self, payload=None, status_error=None, json_error=None):
         self._payload = payload
