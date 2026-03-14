@@ -115,12 +115,26 @@ def test_models_command_fetches_gateway_models(make_update_context):
     assert len(client.calls) == 1
     assert client.calls[0]["path"] == bot.AI_GATEWAY_MODELS_PATH
     assert "X-Request-Id" in client.calls[0]["headers"]
-    assert update.message.replies[-1] == "사용 가능한 모델: gpt-4o-mini, claude-3-5"
+    assert update.message.replies[-1] == "사용 가능한 모델 목록\n- gpt-4o-mini\n- claude-3-5"
 
 
 def test_models_command_handles_gateway_failure(make_update_context):
     request = httpx.Request("GET", "http://test/models")
     client = FakeModelsClient(get_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(text="/models", client=client)
+
+    asyncio.run(bot.models_command(update, context))
+
+    assert update.message.replies[-1] == "죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+
+
+
+
+def test_models_command_handles_gateway_status_error(make_update_context):
+    request = httpx.Request("GET", "http://test/models")
+    response = httpx.Response(503, request=request)
+    status_error = httpx.HTTPStatusError("service unavailable", request=request, response=response)
+    client = FakeModelsClient(status_error=status_error)
     update, context = make_update_context(text="/models", client=client)
 
     asyncio.run(bot.models_command(update, context))

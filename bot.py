@@ -304,13 +304,18 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("현재 확인 가능한 모델이 없어요.")
         return
 
-    listed_models = ", ".join(model_names[:8])
+    displayed_models = model_names[:8]
+    listed_models = "\n".join(f"- {name}" for name in displayed_models)
+    if len(model_names) > len(displayed_models):
+        listed_models += "\n- ..."
+
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
     logger.info(
         f"models_request_success request_id={request_id} user_id={user_id} "
         f"chat_id={chat_id} latency_ms={latency_ms} model_count={len(model_names)}"
     )
-    await update.message.reply_text(f"사용 가능한 모델: {listed_models}")
+    await update.message.reply_text(f"사용 가능한 모델 목록\n{listed_models}")
+
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
