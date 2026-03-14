@@ -217,7 +217,9 @@ def test_preset_command_rejects_unsupported_preset(make_update_context):
     asyncio.run(bot.preset_command(update, context))
 
     assert bot.user_selected_presets.get(user_id) is None
-    assert update.message.replies[-1] == "지원하지 않는 프리셋입니다."
+    assert update.message.replies[-1] == (
+        "지원하지 않는 프리셋입니다. 사용 가능: " + ", ".join(bot.SUPPORTED_PRESETS)
+    )
 
 
 def test_preset_command_shows_selected_preset(make_update_context):

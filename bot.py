@@ -372,7 +372,10 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if requested_preset:
         if requested_preset not in SUPPORTED_PRESETS:
-            await update.message.reply_text("지원하지 않는 프리셋입니다.")
+            supported_presets_text = ", ".join(SUPPORTED_PRESETS)
+            await update.message.reply_text(
+                f"지원하지 않는 프리셋입니다. 사용 가능: {supported_presets_text}"
+            )
             return
 
         lock = get_user_lock(user_id)
