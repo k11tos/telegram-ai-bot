@@ -185,6 +185,26 @@ def test_preset_command_shows_selected_preset(make_update_context):
     assert update.message.replies[-1] == "현재 프리셋: coder"
 
 
+def test_preset_command_falls_back_to_default_for_invalid_value(make_update_context):
+    user_id = 94
+    bot.user_selected_presets[user_id] = " invalid "
+    update, context = make_update_context(user_id=user_id, text="/preset", client=None)
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert update.message.replies[-1] == "현재 프리셋: normal"
+
+
+def test_preset_command_normalizes_selected_preset_value(make_update_context):
+    user_id = 95
+    bot.user_selected_presets[user_id] = " Coder "
+    update, context = make_update_context(user_id=user_id, text="/preset", client=None)
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert update.message.replies[-1] == "현재 프리셋: coder"
+
+
 class FakeGetResponse:
     def __init__(self, payload=None, status_error=None, json_error=None):
         self._payload = payload
