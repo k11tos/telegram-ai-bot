@@ -301,6 +301,29 @@ def get_session_history(user_id: int, session_name: str | None = None) -> list[s
     return per_session.setdefault(active_session, [])
 
 
+
+
+def get_session_reset_token(user_id: int, session_name: str) -> int:
+    per_session_tokens = user_reset_tokens.get(user_id)
+    if not isinstance(per_session_tokens, dict):
+        per_session_tokens = {}
+        user_reset_tokens[user_id] = per_session_tokens
+
+    normalized_session_name = normalize_session_name(session_name)
+    token = per_session_tokens.get(normalized_session_name)
+    if not isinstance(token, int):
+        token = 0
+        per_session_tokens[normalized_session_name] = token
+
+    return token
+
+
+def increment_session_reset_token(user_id: int, session_name: str) -> int:
+    current_token = get_session_reset_token(user_id, session_name)
+    next_token = current_token + 1
+    user_reset_tokens[user_id][normalize_session_name(session_name)] = next_token
+    return next_token
+
 def sanitize_version_value(value: str, max_length: int = 64) -> str:
     normalized = value.strip()
     if not normalized:
@@ -513,7 +536,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         active_session = get_active_session_name(user_id)
         get_session_history(user_id, active_session).clear()
-        user_reset_tokens[user_id] = user_reset_tokens.get(user_id, 0) + 1
+        increment_session_reset_token(user_id, active_session)
         save_bot_state()
     await update.message.reply_text("대화 기록을 초기화했습니다.")
 
@@ -781,8 +804,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         active_session = get_active_session_name(user_id)
         history = get_session_history(user_id, active_session)
-        if user_id not in user_reset_tokens:
-            user_reset_tokens[user_id] = 0
         if user_id not in user_turn_counters:
             user_turn_counters[user_id] = 0
         if user_id not in user_next_turn_to_finalize:
@@ -801,7 +822,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_in_flight_requests[user_id] = True
 
         old_history = history[:]
-        reset_token = user_reset_tokens[user_id]
+        reset_token = get_session_reset_token(user_id, active_session)
         user_turn_counters[user_id] += 1
         turn_id = user_turn_counters[user_id]
         new_history = old_history + [f"User: {user_text}"]
@@ -1046,7 +1067,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not response_delivered:
                     return
 
-                if user_reset_tokens.get(user_id, 0) != reset_token:
+                if get_session_reset_token(user_id, active_session) != reset_token:
                     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
                     logger.info(
                         f"conversation_reset_skip_history_update request_id={request_id} "

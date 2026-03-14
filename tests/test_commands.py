@@ -9,14 +9,14 @@ import bot
 def test_reset_command_clears_conversation_and_replies(make_update_context):
     user_id = 42
     bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = ["User: hi", "AI: hello"]
-    bot.user_reset_tokens[user_id] = 7
+    bot.user_reset_tokens[user_id] = {bot.DEFAULT_SESSION_NAME: 7}
 
     update, context = make_update_context(user_id=user_id, text="/reset", client=None)
 
     asyncio.run(bot.reset(update, context))
 
     assert bot.get_session_history(user_id) == []
-    assert bot.user_reset_tokens[user_id] == 8
+    assert bot.user_reset_tokens[user_id][bot.DEFAULT_SESSION_NAME] == 8
     assert update.message.replies == ["대화 기록을 초기화했습니다."]
 
 

@@ -83,6 +83,39 @@ class FakeClient:
         )
 
 
+class DelayedStreamResponse:
+    def __init__(self, gate, lines, status_error=None):
+        self._gate = gate
+        self._lines = lines
+        self._status_error = status_error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self):
+        if self._status_error is not None:
+            raise self._status_error
+        return None
+
+    async def aiter_lines(self):
+        await self._gate.wait()
+        for line in self._lines:
+            yield line
+
+
+class DelayedClient(FakeClient):
+    def __init__(self, gate, stream_lines):
+        super().__init__(stream_lines=stream_lines)
+        self._gate = gate
+
+    def stream(self, method, path, json=None, headers=None):
+        self.stream_calls.append({"method": method, "path": path, "json": json, "headers": headers})
+        return DelayedStreamResponse(self._gate, self.stream_lines, status_error=self.stream_status_error)
+
+
 def test_first_message_initializes_history_and_calls_gateway(make_update_context):
     client = FakeClient(
         stream_lines=[
@@ -282,6 +315,102 @@ def test_empty_user_input_still_constructs_deterministic_prompt(make_update_cont
 
     assert client.stream_calls[0]["json"] == {"prompt": "User: \nAI:"}
     assert bot.get_session_history(123) == ["User: ", "AI: 빈 입력 응답"]
+
+
+def test_reset_in_other_session_does_not_block_inflight_save(make_update_context):
+    async def scenario():
+        user_id = 700
+        gate = asyncio.Event()
+        client = DelayedClient(
+            gate=gate,
+            stream_lines=[f"data: {json.dumps({'response': 'A 응답'})}", "data: [DONE]"],
+        )
+        update, context = make_update_context(user_id=user_id, text="A 질문", client=client)
+
+        task = asyncio.create_task(bot.handle_message(update, context))
+
+        while not client.stream_calls:
+            await asyncio.sleep(0)
+
+        switch_update, switch_context = make_update_context(
+            user_id=user_id,
+            text="/session work",
+            client=None,
+            args=["work"],
+        )
+        await bot.session_command(switch_update, switch_context)
+
+        reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+        await bot.reset(reset_update, reset_context)
+
+        gate.set()
+        await task
+
+        assert bot.get_session_history(user_id, "default") == ["User: A 질문", "AI: A 응답"]
+        assert bot.get_session_history(user_id, "work") == []
+
+    asyncio.run(scenario())
+
+
+def test_reset_in_same_session_blocks_inflight_save(make_update_context):
+    async def scenario():
+        user_id = 701
+        gate = asyncio.Event()
+        client = DelayedClient(
+            gate=gate,
+            stream_lines=[f"data: {json.dumps({'response': '지연 응답'})}", "data: [DONE]"],
+        )
+        update, context = make_update_context(user_id=user_id, text="같은 세션 질문", client=client)
+
+        task = asyncio.create_task(bot.handle_message(update, context))
+
+        while not client.stream_calls:
+            await asyncio.sleep(0)
+
+        reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+        await bot.reset(reset_update, reset_context)
+
+        gate.set()
+        await task
+
+        assert bot.get_session_history(user_id, "default") == []
+
+    asyncio.run(scenario())
+
+
+def test_session_switch_without_reset_keeps_original_target_session(make_update_context):
+    async def scenario():
+        user_id = 702
+        gate = asyncio.Event()
+        client = DelayedClient(
+            gate=gate,
+            stream_lines=[f"data: {json.dumps({'response': '원래 세션 응답'})}", "data: [DONE]"],
+        )
+        update, context = make_update_context(user_id=user_id, text="세션 고정 질문", client=client)
+
+        task = asyncio.create_task(bot.handle_message(update, context))
+
+        while not client.stream_calls:
+            await asyncio.sleep(0)
+
+        switch_update, switch_context = make_update_context(
+            user_id=user_id,
+            text="/session work",
+            client=None,
+            args=["work"],
+        )
+        await bot.session_command(switch_update, switch_context)
+
+        gate.set()
+        await task
+
+        assert bot.get_session_history(user_id, "default") == [
+            "User: 세션 고정 질문",
+            "AI: 원래 세션 응답",
+        ]
+        assert bot.get_session_history(user_id, "work") == []
+
+    asyncio.run(scenario())
 
 
 def test_session_switch_uses_separate_history(make_update_context):
