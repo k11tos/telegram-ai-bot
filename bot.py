@@ -105,7 +105,7 @@ HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
     "/model - 현재 적용 중인 모델 확인",
-    "/preset - 현재 적용 중인 프리셋 확인",
+    "/preset [name] - 현재 프리셋 확인 또는 변경",
     "/models - 사용 가능한 모델 목록",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
@@ -368,6 +368,22 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    requested_preset = " ".join(context.args).strip().lower() if context.args else ""
+
+    if requested_preset:
+        if requested_preset not in SUPPORTED_PRESETS:
+            supported_presets_text = ", ".join(SUPPORTED_PRESETS)
+            await update.message.reply_text(
+                f"지원하지 않는 프리셋입니다. 사용 가능: {supported_presets_text}"
+            )
+            return
+
+        lock = get_user_lock(user_id)
+        async with lock:
+            user_selected_presets[user_id] = requested_preset
+        await update.message.reply_text(f"프리셋이 변경되었습니다: {requested_preset}")
+        return
+
     active_preset = resolve_active_preset(user_id)
     await update.message.reply_text(f"현재 프리셋: {active_preset}")
 

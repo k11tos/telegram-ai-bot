@@ -373,6 +373,39 @@ def test_preset_is_normalized_before_resolution():
     assert bot.resolve_active_preset(user_id) == "coder"
 
 
+def test_setting_english_preset_via_command_applies_to_followup_message(make_update_context):
+    user_id = 913
+    preset_update, preset_context = make_update_context(
+        user_id=user_id,
+        text="/preset english",
+        client=None,
+        args=["english"],
+    )
+
+    asyncio.run(bot.preset_command(preset_update, preset_context))
+
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': 'Follow-up English reply'})}",
+            "data: [DONE]",
+        ]
+    )
+    message_update, message_context = make_update_context(
+        user_id=user_id,
+        text="Please summarize",
+        client=client,
+    )
+
+    asyncio.run(bot.handle_message(message_update, message_context))
+
+    expected_prompt = (
+        f"{bot.PRESET_PROMPT_PREFIXES['english']}\n\n"
+        "User: Please summarize\nAI:"
+    )
+    assert bot.user_selected_presets[user_id] == "english"
+    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+
+
 def test_english_preset_prefix_is_applied_to_prompt(make_update_context):
     user_id = 911
     bot.user_selected_presets[user_id] = "english"
