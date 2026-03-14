@@ -133,6 +133,28 @@ def test_model_command_handles_missing_client_when_setting(make_update_context):
     assert update.message.replies[-1] == "지금은 모델을 변경할 수 없어요."
 
 
+def test_model_command_resets_selected_model_with_default_alias(make_update_context):
+    user_id = 90
+    bot.user_selected_models[user_id] = "gpt-4o-mini"
+    update, context = make_update_context(user_id=user_id, text="/model default", client=None, args=["default"])
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert bot.user_selected_models.get(user_id) is None
+    assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+
+
+def test_model_command_resets_selected_model_with_reset_alias(make_update_context):
+    user_id = 91
+    bot.user_selected_models[user_id] = "claude-3-5"
+    update, context = make_update_context(user_id=user_id, text="/model reset", client=None, args=["reset"])
+
+    asyncio.run(bot.model_command(update, context))
+
+    assert bot.user_selected_models.get(user_id) is None
+    assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+
+
 class FakeGetResponse:
     def __init__(self, payload=None, status_error=None, json_error=None):
         self._payload = payload
