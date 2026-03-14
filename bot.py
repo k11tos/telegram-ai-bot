@@ -25,6 +25,7 @@ AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
 AI_GATEWAY_CHAT_PATH = "/chat"
 AI_GATEWAY_STREAM_PATH = "/generate_stream"
 AI_GATEWAY_MODELS_PATH = "/models"
+AI_GATEWAY_READY_PATH = "/health/ready"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
 
@@ -107,6 +108,7 @@ HELP_LINES = [
     "/model - 현재 적용 중인 모델 확인",
     "/preset [name] - 현재 프리셋 확인 또는 변경",
     "/models - 사용 가능한 모델 목록",
+    "/health - AI 게이트웨이 준비 상태 확인",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -342,6 +344,46 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(build_version_message())
+
+
+async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    request_id = uuid.uuid4().hex[:12]
+    request_start_ts = time.monotonic()
+    logger.info(f"health_check_start request_id={request_id} user_id={user_id} chat_id={chat_id}")
+
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.error(
+            f"health_check_client_missing request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms}"
+        )
+        await update.message.reply_text("게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    try:
+        response = await client.get(
+            AI_GATEWAY_READY_PATH,
+            headers={"X-Request-Id": request_id},
+        )
+        response.raise_for_status()
+    except (httpx.RequestError, httpx.HTTPStatusError) as error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.warning(
+            f"health_check_failed request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
+        )
+        await update.message.reply_text("게이트웨이 상태가 불안정하거나 사용할 수 없어요.")
+        return
+
+    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+    logger.info(
+        f"health_check_success request_id={request_id} user_id={user_id} "
+        f"chat_id={chat_id} latency_ms={latency_ms}"
+    )
+    await update.message.reply_text("게이트웨이가 정상적으로 준비되어 있어요.")
 
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -868,6 +910,7 @@ def main():
     app.add_handler(CommandHandler("model", model_command))
     app.add_handler(CommandHandler("preset", preset_command))
     app.add_handler(CommandHandler("models", models_command))
+    app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("version", version_command))
