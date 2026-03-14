@@ -32,6 +32,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/reset" in reply
     assert "/status" in reply
     assert "/version" in reply
+    assert "/health" in reply
 
 
 def test_build_version_message_includes_app_and_commit(monkeypatch):
@@ -108,6 +109,48 @@ def test_help_command_includes_models_command(make_update_context):
     assert "/models" in reply
 
 
+
+
+def test_health_command_reports_gateway_ready(make_update_context):
+    client = FakeModelsClient(payload={"ok": True})
+    update, context = make_update_context(text="/health", client=client)
+
+    asyncio.run(bot.health_command(update, context))
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["path"] == bot.AI_GATEWAY_READY_PATH
+    assert "X-Request-Id" in client.calls[0]["headers"]
+    assert update.message.replies[-1] == "게이트웨이가 정상적으로 준비되어 있어요."
+
+
+def test_health_command_handles_gateway_failure(make_update_context):
+    request = httpx.Request("GET", "http://test/health/ready")
+    client = FakeModelsClient(get_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(text="/health", client=client)
+
+    asyncio.run(bot.health_command(update, context))
+
+    assert update.message.replies[-1] == "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+
+
+def test_health_command_handles_gateway_status_error(make_update_context):
+    request = httpx.Request("GET", "http://test/health/ready")
+    response = httpx.Response(503, request=request)
+    status_error = httpx.HTTPStatusError("service unavailable", request=request, response=response)
+    client = FakeModelsClient(status_error=status_error)
+    update, context = make_update_context(text="/health", client=client)
+
+    asyncio.run(bot.health_command(update, context))
+
+    assert update.message.replies[-1] == "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+
+
+def test_health_command_handles_missing_client(make_update_context):
+    update, context = make_update_context(text="/health", client=None)
+
+    asyncio.run(bot.health_command(update, context))
+
+    assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
 def test_model_command_shows_selected_model(make_update_context):
     user_id = 52
     bot.user_selected_models[user_id] = "gpt-4o-mini"
