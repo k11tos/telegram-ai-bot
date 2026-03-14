@@ -120,6 +120,17 @@ def test_health_command_reports_gateway_ready(make_update_context):
     assert len(client.calls) == 1
     assert client.calls[0]["path"] == bot.AI_GATEWAY_READY_PATH
     assert "X-Request-Id" in client.calls[0]["headers"]
+    assert isinstance(client.calls[0]["headers"]["X-Request-Id"], str)
+    assert client.calls[0]["headers"]["X-Request-Id"]
+    assert update.message.replies[-1] == "게이트웨이가 정상적으로 준비되어 있어요."
+
+
+def test_health_command_treats_http_200_as_ready_without_body_inspection(make_update_context):
+    client = FakeModelsClient(json_error=ValueError("invalid payload"))
+    update, context = make_update_context(text="/health", client=client)
+
+    asyncio.run(bot.health_command(update, context))
+
     assert update.message.replies[-1] == "게이트웨이가 정상적으로 준비되어 있어요."
 
 
@@ -151,6 +162,8 @@ def test_health_command_handles_missing_client(make_update_context):
     asyncio.run(bot.health_command(update, context))
 
     assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+
+
 def test_model_command_shows_selected_model(make_update_context):
     user_id = 52
     bot.user_selected_models[user_id] = "gpt-4o-mini"
@@ -184,6 +197,8 @@ def test_model_command_sets_selected_model_when_valid(make_update_context):
     assert len(client.calls) == 1
     assert client.calls[0]["path"] == bot.AI_GATEWAY_MODELS_PATH
     assert "X-Request-Id" in client.calls[0]["headers"]
+    assert isinstance(client.calls[0]["headers"]["X-Request-Id"], str)
+    assert client.calls[0]["headers"]["X-Request-Id"]
     assert bot.user_selected_models[user_id] == "gpt-4o-mini"
     assert update.message.replies[-1] == "모델이 변경되었습니다: gpt-4o-mini"
 
@@ -374,6 +389,8 @@ def test_models_command_fetches_gateway_models(make_update_context):
     assert len(client.calls) == 1
     assert client.calls[0]["path"] == bot.AI_GATEWAY_MODELS_PATH
     assert "X-Request-Id" in client.calls[0]["headers"]
+    assert isinstance(client.calls[0]["headers"]["X-Request-Id"], str)
+    assert client.calls[0]["headers"]["X-Request-Id"]
     assert update.message.replies[-1] == "사용 가능한 모델 목록\n- gpt-4o-mini\n- claude-3-5"
 
 
@@ -407,3 +424,52 @@ def test_models_command_handles_missing_client(make_update_context):
     asyncio.run(bot.models_command(update, context))
 
     assert update.message.replies[-1] == "죄송해요. 지금은 모델 목록을 가져올 수 없어요."
+
+
+def test_main_registers_health_command_handler(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.handlers = []
+            self.run_polling_called = False
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+        def run_polling(self):
+            self.run_polling_called = True
+
+    class FakeBuilder:
+        def __init__(self):
+            self.app = FakeApp()
+
+        def token(self, value):
+            self.token_value = value
+            return self
+
+        def post_init(self, callback):
+            self.post_init_callback = callback
+            return self
+
+        def post_shutdown(self, callback):
+            self.post_shutdown_callback = callback
+            return self
+
+        def build(self):
+            return self.app
+
+    fake_builder = FakeBuilder()
+
+    monkeypatch.setattr(bot, "BOT_TOKEN", "dummy-token")
+    monkeypatch.setattr(bot, "AI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setattr(bot, "ApplicationBuilder", lambda: fake_builder)
+
+    bot.main()
+
+    health_handlers = [
+        handler
+        for handler in fake_builder.app.handlers
+        if "health" in getattr(handler, "commands", set())
+    ]
+    assert len(health_handlers) == 1
+    assert health_handlers[0].callback == bot.health_command
+    assert fake_builder.app.run_polling_called is True
