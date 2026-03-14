@@ -85,7 +85,12 @@ MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 STREAM_EDIT_INTERVAL_SEC = 1.0
-HELP_MESSAGE = "사용 가능한 명령어\n/help - 명령어 안내\n/reset - 대화 기록 초기화"
+HELP_LINES = [
+    "사용 가능한 명령어",
+    "/help - 명령어 안내",
+    "/reset - 대화 기록 초기화",
+]
+HELP_MESSAGE = "\n".join(HELP_LINES)
 
 
 def fit_telegram_text(text: str) -> str:

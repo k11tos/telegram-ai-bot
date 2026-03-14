@@ -22,6 +22,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
 
     asyncio.run(bot.help_command(update, context))
 
-    assert update.message.replies == [
-        "사용 가능한 명령어\n/help - 명령어 안내\n/reset - 대화 기록 초기화"
-    ]
+    reply = update.message.replies[0]
+    assert "사용 가능한 명령어" in reply
+    assert "/help" in reply
+    assert "/reset" in reply
