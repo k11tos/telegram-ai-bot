@@ -91,6 +91,8 @@ HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
     "/model - 현재 적용 중인 모델 확인",
+    "/model <name> - 사용할 모델 설정",
+    "/model default|reset - 기본 모델로 되돌리기",
     "/models - 사용 가능한 모델 목록",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
@@ -257,13 +259,74 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
     selected_model = get_user_selected_model(user_id)
 
-    if selected_model:
-        await update.message.reply_text(f"현재 모델: {selected_model}")
+    requested_model = " ".join(context.args).strip() if context.args else ""
+
+    if not requested_model:
+        if selected_model:
+            await update.message.reply_text(f"현재 모델: {selected_model}")
+            return
+
+        await update.message.reply_text("현재 모델: 기본 모델 사용")
         return
 
-    await update.message.reply_text("현재 모델: 기본 모델 사용")
+    normalized_requested_model = requested_model.lower()
+    if normalized_requested_model in {"default", "reset"}:
+        lock = get_user_lock(user_id)
+        async with lock:
+            user_selected_models.pop(user_id, None)
+        await update.message.reply_text("모델을 기본값으로 되돌렸어요.")
+        return
+
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        await update.message.reply_text("지금은 모델을 변경할 수 없어요.")
+        return
+
+    request_id = uuid.uuid4().hex[:12]
+    request_start_ts = time.monotonic()
+    logger.info(
+        f"model_validate_start request_id={request_id} user_id={user_id} "
+        f"chat_id={chat_id} requested_model={requested_model}"
+    )
+
+    try:
+        response = await client.get(
+            AI_GATEWAY_MODELS_PATH,
+            headers={"X-Request-Id": request_id},
+        )
+        response.raise_for_status()
+        available_models = extract_model_names(response.json())
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.warning(
+            f"model_validate_failed request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
+        )
+        await update.message.reply_text("모델 확인에 실패했어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    if requested_model not in available_models:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.info(
+            f"model_validate_not_found request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms} requested_model={requested_model}"
+        )
+        await update.message.reply_text("사용할 수 없는 모델이에요.")
+        return
+
+    lock = get_user_lock(user_id)
+    async with lock:
+        user_selected_models[user_id] = requested_model
+
+    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+    logger.info(
+        f"model_validate_success request_id={request_id} user_id={user_id} "
+        f"chat_id={chat_id} latency_ms={latency_ms} selected_model={requested_model}"
+    )
+    await update.message.reply_text(f"모델이 변경되었습니다: {requested_model}")
 
 
 def extract_model_names(payload) -> list[str]:
