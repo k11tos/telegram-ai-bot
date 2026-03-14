@@ -21,7 +21,7 @@ class FakeMessage:
 
     async def reply_text(self, text):
         self.replies.append(text)
-        if text == "생각 중…":
+        if text in ("생각 중…", "파일을 읽고 요약 중…"):
             return self.waiting_message
         return SimpleNamespace(text=text)
 
@@ -62,6 +62,7 @@ def make_update_context():
         )
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={bot.HTTP_CLIENT_KEY: client}),
+            bot=SimpleNamespace(),
             args=args if args is not None else [],
         )
         return update, context
