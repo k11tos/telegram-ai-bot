@@ -223,7 +223,11 @@ def get_user_finalize_condition(user_id):
 
 def get_user_selected_model(user_id: int) -> str | None:
     selected_model = user_selected_models.get(user_id)
-    return selected_model if isinstance(selected_model, str) and selected_model else None
+    if not isinstance(selected_model, str):
+        return None
+
+    normalized_model = selected_model.strip()
+    return normalized_model or None
 
 
 def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dict[str, str]:

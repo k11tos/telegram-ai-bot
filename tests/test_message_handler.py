@@ -310,3 +310,14 @@ def test_empty_selected_model_falls_back_to_default_gateway_behavior(make_update
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {"prompt": "User: 기본 질문\nAI:"}
+
+
+def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_update_context):
+    user_id = 224
+    bot.user_selected_models[user_id] = "   "
+    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '공백 모델 응답'})}", "data: [DONE]"])
+    update, context = make_update_context(user_id=user_id, text="공백 질문", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert client.stream_calls[0]["json"] == {"prompt": "User: 공백 질문\nAI:"}
