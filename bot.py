@@ -108,6 +108,8 @@ DEFAULT_SESSION_NAME = "default"
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 STREAM_EDIT_INTERVAL_SEC = 1.0
+SUPPORTED_DOCUMENT_EXTENSIONS = (".txt", ".md")
+MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
@@ -528,6 +530,24 @@ def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dic
     if selected_model:
         payload["model"] = selected_model
     return payload
+
+
+def is_supported_document(file_name: str | None) -> bool:
+    if not isinstance(file_name, str):
+        return False
+    lowered = file_name.lower()
+    return any(lowered.endswith(ext) for ext in SUPPORTED_DOCUMENT_EXTENSIONS)
+
+
+def build_document_summary_prompt(file_name: str, content: str) -> str:
+    return (
+        "다음 문서를 한국어로 간결하게 요약해줘.\n"
+        "요구사항:\n"
+        "- 핵심 내용을 3~5개 bullet로 정리\n"
+        "- 전체 요약은 짧고 명확하게 유지\n"
+        f"- 파일명: {file_name}\n\n"
+        f"문서 원문:\n{content}"
+    )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1087,6 +1107,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_in_flight_requests[user_id] = False
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    request_id = uuid.uuid4().hex[:12]
+    request_start_ts = time.monotonic()
+
+    if document is None:
+        await update.message.reply_text("문서 정보를 확인할 수 없어요.")
+        return
+
+    file_name = document.file_name or "unknown"
+    if not is_supported_document(file_name):
+        await update.message.reply_text("지원하지 않는 파일 형식입니다. .txt 또는 .md 파일만 업로드해주세요.")
+        return
+
+    if document.file_size and document.file_size > MAX_DOCUMENT_BYTES:
+        await update.message.reply_text(
+            f"파일이 너무 큽니다. 최대 {MAX_DOCUMENT_BYTES}바이트까지 처리할 수 있어요."
+        )
+        return
+
+    try:
+        waiting_msg = await update.message.reply_text("파일을 읽고 요약 중…")
+    except Exception:
+        return
+
+    try:
+        telegram_file = await context.bot.get_file(document.file_id)
+        file_bytes = bytes(await telegram_file.download_as_bytearray())
+        if len(file_bytes) > MAX_DOCUMENT_BYTES:
+            await waiting_msg.edit_text(
+                f"파일이 너무 큽니다. 최대 {MAX_DOCUMENT_BYTES}바이트까지 처리할 수 있어요."
+            )
+            return
+
+        try:
+            text_content = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            await waiting_msg.edit_text(
+                "UTF-8 텍스트 파일만 처리할 수 있어요. 인코딩을 확인한 뒤 다시 업로드해주세요."
+            )
+            return
+
+        client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+        if client is None:
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 서버 연결이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
+
+        prompt = build_document_summary_prompt(file_name, text_content)
+        payload = build_gateway_payload(prompt)
+        response = await client.post(
+            AI_GATEWAY_CHAT_PATH,
+            json=payload,
+            headers={"X-Request-Id": request_id},
+        )
+        response.raise_for_status()
+        summary = response.json()["response"]
+        await waiting_msg.edit_text(fit_telegram_text(summary))
+    except httpx.HTTPStatusError as error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.warning(
+            "document_summary_http_status_error request_id=%s user_id=%s chat_id=%s latency_ms=%s error=%s",
+            request_id,
+            user_id,
+            chat_id,
+            latency_ms,
+            error,
+        )
+        await waiting_msg.edit_text("요약 요청 처리 중 서버 오류가 발생했어요. 잠시 후 다시 시도해주세요.")
+    except (httpx.RequestError, ValueError, KeyError) as error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.warning(
+            "document_summary_request_error request_id=%s user_id=%s chat_id=%s latency_ms=%s error=%s",
+            request_id,
+            user_id,
+            chat_id,
+            latency_ms,
+            error,
+        )
+        await waiting_msg.edit_text("문서 요약 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.")
+
+
 async def init_http_client(app):
     timeout = httpx.Timeout(
         connect=HTTP_TIMEOUT_CONFIG["connect"],
@@ -1143,6 +1248,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("version", version_command))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling()
