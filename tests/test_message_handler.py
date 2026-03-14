@@ -326,6 +326,7 @@ def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_u
 def test_preset_constants_are_defined_centrally():
     assert bot.SUPPORTED_PRESETS == ("normal", "coder", "english", "quant")
     assert bot.DEFAULT_PRESET == "normal"
+    assert set(bot.PRESET_PROMPT_PREFIXES.keys()) == set(bot.SUPPORTED_PRESETS)
 
 
 def test_handle_message_uses_active_preset_prefix_for_non_default_preset(make_update_context):
@@ -363,3 +364,50 @@ def test_invalid_preset_falls_back_to_normal_without_prefix(make_update_context)
 
     assert bot.resolve_active_preset(user_id) == "normal"
     assert client.stream_calls[0]["json"] == {"prompt": "User: 기본 동작\nAI:"}
+
+
+def test_preset_is_normalized_before_resolution():
+    user_id = 910
+    bot.user_selected_presets[user_id] = " Coder "
+
+    assert bot.resolve_active_preset(user_id) == "coder"
+
+
+def test_english_preset_prefix_is_applied_to_prompt(make_update_context):
+    user_id = 911
+    bot.user_selected_presets[user_id] = "english"
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': 'English reply'})}",
+            "data: [DONE]",
+        ]
+    )
+
+    update, context = make_update_context(user_id=user_id, text="Please answer", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    expected_prompt = (
+        f"{bot.PRESET_PROMPT_PREFIXES['english']}\n\n"
+        "User: Please answer\nAI:"
+    )
+    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+
+
+def test_quant_preset_prefix_is_applied_to_prompt(make_update_context):
+    user_id = 912
+    bot.user_selected_presets[user_id] = "quant"
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': 'Quant reply'})}",
+            "data: [DONE]",
+        ]
+    )
+
+    update, context = make_update_context(user_id=user_id, text="분석해줘", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    expected_prompt = (
+        f"{bot.PRESET_PROMPT_PREFIXES['quant']}\n\n"
+        "User: 분석해줘\nAI:"
+    )
+    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}

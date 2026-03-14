@@ -94,6 +94,9 @@ PRESET_PROMPT_PREFIXES = {
     "quant": "Assistant role preset: quant. Focus on quantitative analysis and clear assumptions.",
 }
 
+if set(PRESET_PROMPT_PREFIXES.keys()) != set(SUPPORTED_PRESETS):
+    raise AssertionError("SUPPORTED_PRESETS and PRESET_PROMPT_PREFIXES keys must match exactly")
+
 MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
