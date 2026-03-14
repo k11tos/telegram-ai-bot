@@ -81,6 +81,7 @@ user_turn_counters = {}
 user_next_turn_to_finalize = {}
 user_finalize_conditions = {}
 user_in_flight_requests = {}
+user_selected_models = {}
 
 MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
@@ -218,6 +219,18 @@ def get_user_finalize_condition(user_id):
     if user_id not in user_finalize_conditions:
         user_finalize_conditions[user_id] = asyncio.Condition(lock)
     return user_finalize_conditions[user_id]
+
+
+def get_user_selected_model(user_id: int) -> str | None:
+    selected_model = user_selected_models.get(user_id)
+    return selected_model if isinstance(selected_model, str) and selected_model else None
+
+
+def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dict[str, str]:
+    payload = {"prompt": prompt}
+    if selected_model:
+        payload["model"] = selected_model
+    return payload
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -360,6 +373,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         turn_id = user_turn_counters[user_id]
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
+        selected_model = get_user_selected_model(user_id)
 
     try:
         try:
@@ -379,7 +393,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         prompt = "\n".join(new_history) + "\nAI:"
-        payload = {"prompt": prompt}
+        payload = build_gateway_payload(prompt, selected_model)
         gateway_headers = {"X-Request-Id": request_id}
         client = context.application.bot_data.get(HTTP_CLIENT_KEY)
 
