@@ -85,6 +85,12 @@ MAX_HISTORY = 10
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 STREAM_EDIT_INTERVAL_SEC = 1.0
+HELP_LINES = [
+    "사용 가능한 명령어",
+    "/help - 명령어 안내",
+    "/reset - 대화 기록 초기화",
+]
+HELP_MESSAGE = "\n".join(HELP_LINES)
 
 
 def fit_telegram_text(text: str) -> str:
@@ -193,6 +199,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conversations[user_id] = []
         user_reset_tokens[user_id] = user_reset_tokens.get(user_id, 0) + 1
     await update.message.reply_text("대화 기록을 초기화했습니다.")
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(HELP_MESSAGE)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -539,6 +549,7 @@ def main():
         .build()
     )
 
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
