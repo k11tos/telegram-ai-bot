@@ -24,6 +24,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
 AI_GATEWAY_CHAT_PATH = "/chat"
 AI_GATEWAY_STREAM_PATH = "/generate_stream"
+AI_GATEWAY_MODELS_PATH = "/models"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
 
@@ -88,6 +89,7 @@ STREAM_EDIT_INTERVAL_SEC = 1.0
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
+    "/models - 사용 가능한 모델 목록",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
 ]
@@ -233,6 +235,87 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(build_status_message(context))
+
+
+def extract_model_names(payload) -> list[str]:
+    if isinstance(payload, dict):
+        if isinstance(payload.get("models"), list):
+            source = payload["models"]
+        elif isinstance(payload.get("data"), list):
+            source = payload["data"]
+        else:
+            source = []
+    elif isinstance(payload, list):
+        source = payload
+    else:
+        source = []
+
+    model_names = []
+    for item in source:
+        if isinstance(item, str):
+            model_names.append(item)
+        elif isinstance(item, dict):
+            model_id = item.get("id") or item.get("name")
+            if isinstance(model_id, str):
+                model_names.append(model_id)
+
+    return model_names
+
+
+async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    request_id = uuid.uuid4().hex[:12]
+    request_start_ts = time.monotonic()
+    logger.info(f"models_request_start request_id={request_id} user_id={user_id} chat_id={chat_id}")
+
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.error(
+            f"models_http_client_missing request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms}"
+        )
+        await update.message.reply_text("죄송해요. 지금은 모델 목록을 가져올 수 없어요.")
+        return
+
+    try:
+        response = await client.get(
+            AI_GATEWAY_MODELS_PATH,
+            headers={"X-Request-Id": request_id},
+        )
+        response.raise_for_status()
+        model_names = extract_model_names(response.json())
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.warning(
+            f"models_request_failed request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
+        )
+        await update.message.reply_text("죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    if not model_names:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.info(
+            f"models_request_empty request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms}"
+        )
+        await update.message.reply_text("현재 확인 가능한 모델이 없어요.")
+        return
+
+    displayed_models = model_names[:8]
+    listed_models = "\n".join(f"- {name}" for name in displayed_models)
+    if len(model_names) > len(displayed_models):
+        listed_models += "\n- ..."
+
+    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+    logger.info(
+        f"models_request_success request_id={request_id} user_id={user_id} "
+        f"chat_id={chat_id} latency_ms={latency_ms} model_count={len(model_names)}"
+    )
+    await update.message.reply_text(f"사용 가능한 모델 목록\n{listed_models}")
+
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -580,6 +663,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
