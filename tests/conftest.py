@@ -49,7 +49,7 @@ def clear_bot_state():
 
 @pytest.fixture
 def make_update_context():
-    def _build(user_id=123, chat_id=456, text="hello", client=None):
+    def _build(user_id=123, chat_id=456, text="hello", client=None, args=None):
         message = FakeMessage(text=text)
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=user_id),
@@ -57,7 +57,8 @@ def make_update_context():
             message=message,
         )
         context = SimpleNamespace(
-            application=SimpleNamespace(bot_data={bot.HTTP_CLIENT_KEY: client})
+            application=SimpleNamespace(bot_data={bot.HTTP_CLIENT_KEY: client}),
+            args=args if args is not None else [],
         )
         return update, context
 
