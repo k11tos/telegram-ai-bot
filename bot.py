@@ -105,6 +105,7 @@ HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
     "/model - 현재 적용 중인 모델 확인",
+    "/preset - 현재 적용 중인 프리셋 확인",
     "/models - 사용 가능한 모델 목록",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
@@ -363,6 +364,12 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"chat_id={chat_id} latency_ms={latency_ms} selected_model={requested_model}"
     )
     await update.message.reply_text(f"모델이 변경되었습니다: {requested_model}")
+
+
+async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    active_preset = resolve_active_preset(user_id)
+    await update.message.reply_text(f"현재 프리셋: {active_preset}")
 
 
 def extract_model_names(payload) -> list[str]:
@@ -794,6 +801,7 @@ def main():
 
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("model", model_command))
+    app.add_handler(CommandHandler("preset", preset_command))
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
