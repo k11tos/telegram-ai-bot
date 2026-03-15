@@ -84,10 +84,12 @@ if [[ -n "$app_version_value" || -n "$commit_sha_value" ]]; then
     commit_sha_value="$(git rev-parse HEAD)"
   fi
 
-  printf 'APP_VERSION=%s\nCOMMIT_SHA=%s\n' "$app_version_value" "$commit_sha_value" > "$env_file_path"
+  tmp_env_file="$(mktemp "${env_file_path}.tmp.XXXXXX")"
+  printf 'APP_VERSION=%s\nCOMMIT_SHA=%s\n' "$app_version_value" "$commit_sha_value" > "$tmp_env_file"
+  mv "$tmp_env_file" "$env_file_path"
 
   drop_in_dir="/etc/systemd/system/${SERVICE_NAME}.service.d"
-  drop_in_file="$drop_in_dir/override.conf"
+  drop_in_file="$drop_in_dir/10-deploy-runtime-env.conf"
   sudo mkdir -p "$drop_in_dir"
   sudo tee "$drop_in_file" >/dev/null <<EOF
 [Service]
