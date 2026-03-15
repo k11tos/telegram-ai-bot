@@ -32,6 +32,8 @@ log "Validating required environment variables"
 require_env APP_DIR
 require_env SERVICE_NAME
 
+DEPLOY_RUNTIME_ENV_FILE="${DEPLOY_RUNTIME_ENV_FILE:-.deploy-runtime.env}"
+
 if [[ "$APP_DIR" == "~" ]]; then
   APP_DIR="$HOME"
 elif [[ "$APP_DIR" == ~/* ]]; then
@@ -66,6 +68,36 @@ log "Checking out branch '$BRANCH' at $target_ref"
 if ! git checkout -B "$BRANCH" "$target_ref"; then
   echo "Error: failed to checkout '$target_ref' to local branch '$BRANCH'." >&2
   exit 1
+fi
+
+
+log "Persisting runtime version metadata"
+app_version_value="${APP_VERSION:-}"
+commit_sha_value="${COMMIT_SHA:-}"
+env_file_path="$APP_DIR/$DEPLOY_RUNTIME_ENV_FILE"
+
+if [[ -n "$app_version_value" || -n "$commit_sha_value" ]]; then
+  if [[ -z "$app_version_value" ]]; then
+    app_version_value="${BRANCH}-$(git rev-parse --short=12 HEAD)"
+  fi
+  if [[ -z "$commit_sha_value" ]]; then
+    commit_sha_value="$(git rev-parse HEAD)"
+  fi
+
+  printf 'APP_VERSION=%s\nCOMMIT_SHA=%s\n' "$app_version_value" "$commit_sha_value" > "$env_file_path"
+
+  drop_in_dir="/etc/systemd/system/${SERVICE_NAME}.service.d"
+  drop_in_file="$drop_in_dir/override.conf"
+  sudo mkdir -p "$drop_in_dir"
+  sudo tee "$drop_in_file" >/dev/null <<EOF
+[Service]
+EnvironmentFile=$env_file_path
+EOF
+
+  sudo systemctl daemon-reload
+  log "Runtime metadata written to $env_file_path"
+else
+  log "APP_VERSION and COMMIT_SHA were not provided; skipping runtime metadata update"
 fi
 
 log "Restarting service: $SERVICE_NAME"
