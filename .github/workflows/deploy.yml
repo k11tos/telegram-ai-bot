@@ -102,6 +102,24 @@ jobs:
           set -euo pipefail
           scp -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o BatchMode=yes -P "$SSH_PORT" scripts/deploy.sh "$PI_USER@$PI_HOST:/tmp/telegram-ai-bot-deploy.sh"
 
+      - name: Resolve deploy runtime metadata
+        id: metadata
+        env:
+          BRANCH: ${{ steps.validate.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          git fetch --prune origin "$BRANCH"
+          full_sha="$(git rev-parse "origin/$BRANCH")"
+          short_sha="$(git rev-parse --short=12 "$full_sha")"
+          app_version="${BRANCH}-${short_sha}"
+
+          {
+            echo "full_sha=$full_sha"
+            echo "short_sha=$short_sha"
+            echo "app_version=$app_version"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Execute deploy script via SSH
         env:
           PI_HOST: ${{ secrets.PI_HOST }}
@@ -111,12 +129,16 @@ jobs:
           SERVICE_NAME: ${{ steps.validate.outputs.service_name }}
           BRANCH: ${{ steps.validate.outputs.branch }}
           STARTUP_WAIT_SECONDS: ${{ steps.validate.outputs.startup_wait_seconds }}
+          APP_VERSION: ${{ steps.metadata.outputs.app_version }}
+          COMMIT_SHA: ${{ steps.metadata.outputs.full_sha }}
         run: |
           set -euo pipefail
           printf -v APP_DIR_Q '%q' "$APP_DIR"
           printf -v SERVICE_NAME_Q '%q' "$SERVICE_NAME"
           printf -v BRANCH_Q '%q' "$BRANCH"
           printf -v STARTUP_WAIT_SECONDS_Q '%q' "$STARTUP_WAIT_SECONDS"
+          printf -v APP_VERSION_Q '%q' "$APP_VERSION"
+          printf -v COMMIT_SHA_Q '%q' "$COMMIT_SHA"
 
           ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o BatchMode=yes -p "$SSH_PORT" "$PI_USER@$PI_HOST" \
-            "chmod +x /tmp/telegram-ai-bot-deploy.sh && APP_DIR=$APP_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q bash /tmp/telegram-ai-bot-deploy.sh"
+            "chmod +x /tmp/telegram-ai-bot-deploy.sh && APP_DIR=$APP_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q APP_VERSION=$APP_VERSION_Q COMMIT_SHA=$COMMIT_SHA_Q bash /tmp/telegram-ai-bot-deploy.sh"
