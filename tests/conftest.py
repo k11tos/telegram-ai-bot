@@ -8,8 +8,11 @@ import bot
 class FakeWaitingMessage:
     def __init__(self):
         self.edits = []
+        self.fail_on_edit = False
 
     async def edit_text(self, text):
+        if self.fail_on_edit:
+            raise RuntimeError("edit failed")
         self.edits.append(text)
 
 
