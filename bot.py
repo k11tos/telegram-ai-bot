@@ -623,9 +623,9 @@ async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "\n".join(
             [
-                f"Active session: {active_session}",
+                f"현재 세션: {active_session}",
                 "",
-                "Available sessions:",
+                "보유한 세션 목록:",
                 available_sessions_lines,
             ]
         )

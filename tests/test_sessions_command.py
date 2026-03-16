@@ -11,8 +11,8 @@ def test_sessions_command_single_session(make_update_context):
     asyncio.run(bot.sessions_command(update, context))
 
     assert update.message.replies[-1] == (
-        "Active session: default\n\n"
-        "Available sessions:\n"
+        "현재 세션: default\n\n"
+        "보유한 세션 목록:\n"
         "- default"
     )
 
@@ -27,8 +27,8 @@ def test_sessions_command_multiple_sessions_sorted(make_update_context):
     asyncio.run(bot.sessions_command(update, context))
 
     assert update.message.replies[-1] == (
-        "Active session: trading\n\n"
-        "Available sessions:\n"
+        "현재 세션: trading\n\n"
+        "보유한 세션 목록:\n"
         "- coding\n"
         "- trading"
     )
@@ -41,7 +41,7 @@ def test_sessions_command_empty_case(make_update_context):
     asyncio.run(bot.sessions_command(update, context))
 
     assert update.message.replies[-1] == (
-        "Active session: default\n\n"
-        "Available sessions:\n"
+        "현재 세션: default\n\n"
+        "보유한 세션 목록:\n"
         "- (none)"
     )
