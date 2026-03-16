@@ -67,3 +67,29 @@ def test_load_gateway_presets_falls_back_to_static_when_gateway_fails():
     asyncio.run(bot.load_gateway_presets(app))
 
     assert app.bot_data[bot.PRESETS_KEY] == bot.get_static_presets()
+
+
+def test_build_prompt_with_gateway_prefix_preserves_exact_formatting():
+    presets = {
+        "research": {
+            "description": "Research mode",
+            "prompt_prefix": "  Prefix with space\n",
+        }
+    }
+
+    prompt = bot.build_prompt_with_preset(["User: hi"], "research", presets)
+
+    assert prompt == "  Prefix with space\nUser: hi\nAI:"
+
+
+def test_build_prompt_with_gateway_prefix_does_not_insert_extra_blank_line():
+    presets = {
+        "research": {
+            "description": "Research mode",
+            "prompt_prefix": "Preset: research.",
+        }
+    }
+
+    prompt = bot.build_prompt_with_preset(["User: hi"], "research", presets)
+
+    assert prompt == "Preset: research.User: hi\nAI:"

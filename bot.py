@@ -97,15 +97,15 @@ STATIC_PRESET_DEFINITIONS = {
     "normal": {"description": "기본 응답 스타일", "prompt_prefix": ""},
     "coder": {
         "description": "실용적인 코딩 중심 답변",
-        "prompt_prefix": "Preset: coder. Focus on practical coding help.",
+        "prompt_prefix": "Preset: coder. Focus on practical coding help.\n\n",
     },
     "english": {
         "description": "영어 우선 답변",
-        "prompt_prefix": "Preset: english. Reply in English unless asked otherwise.",
+        "prompt_prefix": "Preset: english. Reply in English unless asked otherwise.\n\n",
     },
     "quant": {
         "description": "정량적 추론 중심 답변",
-        "prompt_prefix": "Preset: quant. Prefer quantitative reasoning and clear assumptions.",
+        "prompt_prefix": "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n",
     },
 }
 PRESETS_KEY = "presets"
@@ -650,7 +650,7 @@ def build_prompt_with_preset(
     if not preset_prefix:
         return prompt
 
-    return f"{preset_prefix}\n\n{prompt}"
+    return f"{preset_prefix}{prompt}"
 
 
 def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dict[str, str]:
