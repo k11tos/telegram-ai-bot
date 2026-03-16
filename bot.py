@@ -130,6 +130,7 @@ HELP_LINES = [
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
     "/session [name] - 현재 세션 확인 또는 변경",
+    "/session_rename <old> <new> - 세션 이름 변경",
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/reset - 대화 기록 초기화",
@@ -737,6 +738,52 @@ async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
     )
+
+
+async def session_rename_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if len(context.args) < 2:
+        await update.message.reply_text("기존 세션 이름과 새 세션 이름을 모두 입력해주세요.")
+        return
+
+    old_session = normalize_session_name(context.args[0])
+    new_session = normalize_session_name(context.args[1])
+
+    if old_session == new_session:
+        await update.message.reply_text("변경 전/후 세션 이름이 같아요. 다른 이름을 입력해주세요.")
+        return
+
+    if old_session == DEFAULT_SESSION_NAME:
+        await update.message.reply_text("기본 세션 이름은 변경할 수 없어요.")
+        return
+
+    renamed = False
+    duplicate_name = False
+    active_session = get_active_session_name(user_id)
+    lock = get_user_lock(user_id)
+    async with lock:
+        per_session = ensure_user_sessions(user_id)
+        if old_session not in per_session:
+            pass
+        elif new_session in per_session:
+            duplicate_name = True
+        else:
+            per_session[new_session] = per_session.pop(old_session)
+            if active_session == old_session:
+                user_active_sessions[user_id] = new_session
+            save_bot_state()
+            renamed = True
+
+    if duplicate_name:
+        await update.message.reply_text(f"이미 존재하는 세션 이름이에요: {new_session}")
+        return
+
+    if not renamed:
+        await update.message.reply_text(f"세션을 찾을 수 없어요: {old_session}")
+        return
+
+    await update.message.reply_text(f"세션 이름이 변경되었습니다: {old_session} → {new_session}")
 
 
 async def session_delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1489,6 +1536,7 @@ def main():
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("session", session_command))
+    app.add_handler(CommandHandler("session_rename", session_rename_command))
     app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
     app.add_handler(CommandHandler("reset", reset))
