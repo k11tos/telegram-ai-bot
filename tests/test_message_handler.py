@@ -136,6 +136,30 @@ def test_first_message_initializes_history_and_calls_gateway(make_update_context
     assert client.post_calls == []
 
 
+
+
+def test_long_response_is_delivered_in_chunks_via_edit_then_replies(make_update_context):
+    long_response = (("첫 문단입니다. " * 200) + "\n\n" + ("둘째 문단입니다. " * 220)).strip()
+    expected_chunks = bot.split_telegram_text(long_response)
+    assert len(expected_chunks) > 1
+
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': long_response})}",
+            "data: [DONE]",
+        ]
+    )
+    update, context = make_update_context(text="길게 답해줘", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert update.message.replies[0] == "생각 중…"
+    assert update.message.waiting_message.edits[-1] == expected_chunks[0]
+    assert update.message.replies[1:] == expected_chunks[1:]
+
+    delivered = update.message.waiting_message.edits[-1] + "".join(update.message.replies[1:])
+    assert delivered == long_response
+
 def test_existing_conversation_trims_and_preserves_latest_history(make_update_context):
     user_id = 77
     old_history = [f"Turn {i}" for i in range(bot.MAX_HISTORY)]

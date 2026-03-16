@@ -32,3 +32,14 @@ def test_split_code_block_text_preserves_content_and_limit():
     assert len(chunks) > 1
     assert all(len(chunk) <= 4000 for chunk in chunks)
     assert "".join(chunks) == text
+
+
+def test_split_leading_delimiters_does_not_create_empty_chunks():
+    text = "\n\n" + (" 앞부분 공백 포함 텍스트" * 260)
+
+    chunks = bot.split_telegram_text(text, limit=120)
+
+    assert len(chunks) > 1
+    assert all(chunks)
+    assert all(len(chunk) <= 120 for chunk in chunks)
+    assert "".join(chunks) == text
