@@ -1378,7 +1378,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             response.raise_for_status()
             summary = response.json()["response"]
-            await waiting_msg.edit_text(fit_telegram_text(summary))
+            summary_chunks = split_telegram_text(summary)
+            try:
+                await waiting_msg.edit_text(summary_chunks[0])
+                for chunk in summary_chunks[1:]:
+                    await update.message.reply_text(chunk)
+            except Exception as edit_error:
+                logger.warning(
+                    "document_summary_edit_failed request_id=%s user_id=%s chat_id=%s error=%s",
+                    request_id,
+                    user_id,
+                    chat_id,
+                    edit_error,
+                )
+                for chunk in summary_chunks:
+                    await update.message.reply_text(chunk)
         except httpx.HTTPStatusError as error:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.warning(

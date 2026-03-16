@@ -89,10 +89,60 @@ def test_handle_document_summarizes_supported_file(make_update_context):
 
     assert update.message.replies[0] == "파일을 읽고 요약 중…"
     assert update.message.waiting_message.edits[-1] == "- 핵심 요약"
+    assert len(update.message.replies) == 1
     assert len(client.post_calls) == 1
     assert client.post_calls[0]["path"] == bot.AI_GATEWAY_CHAT_PATH
     assert "한국어로 간결하게 요약" in client.post_calls[0]["json"]["prompt"]
 
+
+
+
+def test_handle_document_long_summary_is_split_without_truncation(make_update_context):
+    long_summary = (("요약 문장 " * 800) + "\n\n" + ("추가 문장 " * 800)).strip()
+    expected_chunks = bot.split_telegram_text(long_summary)
+    assert len(expected_chunks) > 1
+
+    client = FakeClient(post_payload={"response": long_summary})
+    update, context = make_document_update_context(
+        make_update_context,
+        file_name="readme.md",
+        file_size=30,
+        content="테스트 문서 내용".encode("utf-8"),
+        client=client,
+    )
+
+    asyncio.run(bot.handle_document(update, context))
+
+    assert update.message.replies[0] == "파일을 읽고 요약 중…"
+    assert update.message.waiting_message.edits[-1] == expected_chunks[0]
+    assert update.message.replies[1:] == expected_chunks[1:]
+
+    delivered = update.message.waiting_message.edits[-1] + "".join(update.message.replies[1:])
+    assert delivered == long_summary
+
+
+def test_handle_document_fallback_sends_all_chunks_when_waiting_edit_fails(make_update_context):
+    long_summary = (("요약 문장 " * 800) + "\n\n" + ("추가 문장 " * 800)).strip()
+    expected_chunks = bot.split_telegram_text(long_summary)
+    assert len(expected_chunks) > 1
+
+    client = FakeClient(post_payload={"response": long_summary})
+    update, context = make_document_update_context(
+        make_update_context,
+        file_name="readme.md",
+        file_size=30,
+        content="테스트 문서 내용".encode("utf-8"),
+        client=client,
+    )
+    update.message.waiting_message.fail_on_edit = True
+
+    asyncio.run(bot.handle_document(update, context))
+
+    assert update.message.waiting_message.edits == []
+    assert update.message.replies[0] == "파일을 읽고 요약 중…"
+    assert update.message.replies[1:] == expected_chunks
+    delivered = "".join(update.message.replies[1:])
+    assert delivered == long_summary
 
 def test_handle_document_cleanly_handles_gateway_error(make_update_context):
     request = httpx.Request("POST", "http://test/chat")
