@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import time
 import uuid
 
@@ -743,12 +744,26 @@ async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def session_rename_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    if len(context.args) < 2:
+    raw_text = update.message.text if update.message and isinstance(update.message.text, str) else ""
+    args_text = raw_text.partition(" ")[2].strip()
+
+    parsed_args: list[str] = []
+    if args_text:
+        try:
+            parsed_args = shlex.split(args_text)
+        except ValueError:
+            parsed_args = []
+
+    if len(parsed_args) >= 2:
+        old_name, new_name = parsed_args[0], parsed_args[1]
+    elif len(context.args) >= 2:
+        old_name, new_name = context.args[0], context.args[1]
+    else:
         await update.message.reply_text("기존 세션 이름과 새 세션 이름을 모두 입력해주세요.")
         return
 
-    old_session = normalize_session_name(context.args[0])
-    new_session = normalize_session_name(context.args[1])
+    old_session = normalize_session_name(old_name)
+    new_session = normalize_session_name(new_name)
 
     if old_session == new_session:
         await update.message.reply_text("변경 전/후 세션 이름이 같아요. 다른 이름을 입력해주세요.")

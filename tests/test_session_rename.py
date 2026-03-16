@@ -99,3 +99,66 @@ def test_session_rename_normalization_same_name_edge_case(make_update_context):
 
     assert "coding" in bot.ensure_user_sessions(user_id)
     assert update.message.replies[-1] == "변경 전/후 세션 이름이 같아요. 다른 이름을 입력해주세요."
+
+
+def test_session_rename_source_name_with_spaces(make_update_context):
+    user_id = 306
+    sessions = bot.ensure_user_sessions(user_id)
+    sessions[bot.DEFAULT_SESSION_NAME] = ["User: hi"]
+    sessions["my project"] = ["User: notes"]
+
+    update, context = make_update_context(
+        user_id=user_id,
+        text='/session_rename "my project" python',
+        client=None,
+        args=['"my', 'project"', 'python'],
+    )
+
+    asyncio.run(bot.session_rename_command(update, context))
+
+    renamed_sessions = bot.ensure_user_sessions(user_id)
+    assert "my project" not in renamed_sessions
+    assert renamed_sessions["python"] == ["User: notes"]
+    assert update.message.replies[-1] == "세션 이름이 변경되었습니다: my project → python"
+
+
+def test_session_rename_target_name_with_spaces(make_update_context):
+    user_id = 307
+    sessions = bot.ensure_user_sessions(user_id)
+    sessions[bot.DEFAULT_SESSION_NAME] = ["User: hi"]
+    sessions["coding"] = ["User: code"]
+
+    update, context = make_update_context(
+        user_id=user_id,
+        text='/session_rename coding "new project"',
+        client=None,
+        args=["coding", '"new', 'project"'],
+    )
+
+    asyncio.run(bot.session_rename_command(update, context))
+
+    renamed_sessions = bot.ensure_user_sessions(user_id)
+    assert "coding" not in renamed_sessions
+    assert renamed_sessions["new project"] == ["User: code"]
+    assert update.message.replies[-1] == "세션 이름이 변경되었습니다: coding → new project"
+
+
+def test_session_rename_uses_quoted_raw_text_parsing(make_update_context):
+    user_id = 308
+    sessions = bot.ensure_user_sessions(user_id)
+    sessions[bot.DEFAULT_SESSION_NAME] = ["User: hi"]
+    sessions["my project"] = ["User: notes"]
+
+    update, context = make_update_context(
+        user_id=user_id,
+        text='/session_rename "my project" "new project"',
+        client=None,
+        args=['"my', 'project"', '"new', 'project"'],
+    )
+
+    asyncio.run(bot.session_rename_command(update, context))
+
+    renamed_sessions = bot.ensure_user_sessions(user_id)
+    assert "my project" not in renamed_sessions
+    assert renamed_sessions["new project"] == ["User: notes"]
+    assert update.message.replies[-1] == "세션 이름이 변경되었습니다: my project → new project"
