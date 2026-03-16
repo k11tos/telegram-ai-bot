@@ -119,6 +119,7 @@ HELP_LINES = [
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
     "/session [name] - 현재 세션 확인 또는 변경",
+    "/sessions - 보유한 세션 목록 확인",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -608,6 +609,27 @@ async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         get_session_history(user_id, next_session)
         save_bot_state()
     await update.message.reply_text(f"세션 변경: {next_session}")
+
+
+async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    active_session = get_active_session_name(user_id)
+    session_names = sorted(ensure_user_sessions(user_id).keys())
+
+    available_sessions_lines = "\n".join(f"- {name}" for name in session_names)
+    if not available_sessions_lines:
+        available_sessions_lines = "- (none)"
+
+    await update.message.reply_text(
+        "\n".join(
+            [
+                f"현재 세션: {active_session}",
+                "",
+                "보유한 세션 목록:",
+                available_sessions_lines,
+            ]
+        )
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1304,6 +1326,7 @@ def main():
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("session", session_command))
+    app.add_handler(CommandHandler("sessions", sessions_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("version", version_command))
