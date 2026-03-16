@@ -44,7 +44,33 @@ def test_handle_document_rejects_unsupported_extension(make_update_context):
 
     asyncio.run(bot.handle_document(update, context))
 
-    assert update.message.replies[-1] == "지원하지 않는 파일 형식입니다. .txt 또는 .md 파일만 업로드해주세요."
+    assert update.message.replies[-1] == (
+        "지원하지 않는 파일 형식입니다. "
+        f"지원 형식: {bot.SUPPORTED_DOCUMENT_EXTENSIONS_TEXT}"
+    )
+
+
+def test_is_supported_document_accepts_all_supported_extensions():
+    for file_name in (
+        "notes.txt",
+        "readme.md",
+        "server.log",
+        "script.py",
+        "config.json",
+        "compose.yaml",
+        "compose.yml",
+        "data.csv",
+    ):
+        assert bot.is_supported_document(file_name)
+
+
+def test_is_supported_document_rejects_unsupported_extension():
+    assert not bot.is_supported_document("archive.zip")
+
+
+def test_is_supported_document_still_supports_txt_and_md():
+    assert bot.is_supported_document("legacy.txt")
+    assert bot.is_supported_document("legacy.md")
 
 
 def test_handle_document_rejects_large_file_by_metadata(make_update_context):
