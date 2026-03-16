@@ -399,6 +399,37 @@ def fit_telegram_text(text: str) -> str:
     return text[: TELEGRAM_MESSAGE_MAX_LEN - 1] + "…"
 
 
+def split_telegram_text(text: str, limit: int = 4000) -> list[str]:
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    delimiters = ("\n\n", "\n", " ")
+
+    while len(remaining) > limit:
+        current_window = remaining[:limit]
+        split_at = -1
+
+        for delimiter in delimiters:
+            delimiter_idx = current_window.rfind(delimiter)
+            if delimiter_idx != -1:
+                split_at = delimiter_idx + len(delimiter)
+                break
+
+        if split_at <= 0:
+            split_at = limit
+
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+
+    chunks.append(remaining)
+    return chunks
+
+
 def extract_stream_delta(raw_line: str) -> tuple[str, bool]:
     line = raw_line.strip()
     if not line:
@@ -1034,8 +1065,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response_delivered = True
         try:
-            final_text = fit_telegram_text(result)
-            await waiting_msg.edit_text(final_text)
+            final_chunks = split_telegram_text(result)
+            await waiting_msg.edit_text(final_chunks[0])
+            for chunk in final_chunks[1:]:
+                await update.message.reply_text(chunk)
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.info(
                 f"response_delivered request_id={request_id} user_id={user_id} "
@@ -1048,7 +1081,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"chat_id={chat_id} latency_ms={latency_ms} error={edit_error}"
             )
             try:
-                await update.message.reply_text(fit_telegram_text(result))
+                final_chunks = split_telegram_text(result)
+                for chunk in final_chunks:
+                    await update.message.reply_text(chunk)
                 latency_ms = int((time.monotonic() - request_start_ts) * 1000)
                 logger.info(
                     f"response_delivered request_id={request_id} user_id={user_id} "
