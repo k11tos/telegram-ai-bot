@@ -118,7 +118,8 @@ DEFAULT_SESSION_NAME = "default"
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 STREAM_EDIT_INTERVAL_SEC = 1.0
-SUPPORTED_DOCUMENT_EXTENSIONS = (".txt", ".md")
+SUPPORTED_DOCUMENT_EXTENSIONS = (".txt", ".md", ".log", ".py", ".json", ".yaml", ".yml", ".csv")
+SUPPORTED_DOCUMENT_EXTENSIONS_TEXT = ", ".join(SUPPORTED_DOCUMENT_EXTENSIONS)
 MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
 HELP_LINES = [
@@ -665,6 +666,17 @@ def is_supported_document(file_name: str | None) -> bool:
         return False
     lowered = file_name.lower()
     return any(lowered.endswith(ext) for ext in SUPPORTED_DOCUMENT_EXTENSIONS)
+
+
+def build_supported_document_filter():
+    extension_filters = [
+        filters.Document.FileExtension(extension.lstrip("."))
+        for extension in SUPPORTED_DOCUMENT_EXTENSIONS
+    ]
+    merged_filter = extension_filters[0]
+    for extension_filter in extension_filters[1:]:
+        merged_filter = merged_filter | extension_filter
+    return merged_filter
 
 
 def build_document_summary_prompt(file_name: str, content: str) -> str:
@@ -1329,7 +1341,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         file_name = document.file_name or "unknown"
         if not is_supported_document(file_name):
-            await update.message.reply_text("지원하지 않는 파일 형식입니다. .txt 또는 .md 파일만 업로드해주세요.")
+            await update.message.reply_text(
+                "지원하지 않는 파일 형식입니다. "
+                f"지원 형식: {SUPPORTED_DOCUMENT_EXTENSIONS_TEXT}"
+            )
             return
 
         if document.file_size and document.file_size > MAX_DOCUMENT_BYTES:
@@ -1479,7 +1494,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("version", version_command))
-    app.add_handler(MessageHandler((filters.Document.FileExtension("txt") | filters.Document.FileExtension("md")), handle_document))
+    app.add_handler(MessageHandler(build_supported_document_filter(), handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling()
