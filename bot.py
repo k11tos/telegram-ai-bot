@@ -119,6 +119,7 @@ HELP_LINES = [
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
     "/session [name] - 현재 세션 확인 또는 변경",
+    "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
@@ -630,6 +631,38 @@ async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
     )
+
+
+async def session_delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    requested_session = " ".join(context.args).strip() if context.args else ""
+
+    if not requested_session:
+        await update.message.reply_text("Error: session name is required")
+        return
+
+    target_session = normalize_session_name(requested_session)
+    active_session = get_active_session_name(user_id)
+
+    if target_session == active_session:
+        await update.message.reply_text("Error: cannot delete the active session")
+        return
+
+    if target_session == DEFAULT_SESSION_NAME:
+        await update.message.reply_text("Error: cannot delete the default session")
+        return
+
+    lock = get_user_lock(user_id)
+    async with lock:
+        per_session = ensure_user_sessions(user_id)
+        if target_session not in per_session:
+            await update.message.reply_text(f"Error: session not found: {target_session}")
+            return
+
+        per_session.pop(target_session, None)
+        save_bot_state()
+
+    await update.message.reply_text(f"Session deleted: {target_session}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1326,6 +1359,7 @@ def main():
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("session", session_command))
+    app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("status", status_command))
