@@ -638,31 +638,34 @@ async def session_delete_command(update: Update, context: ContextTypes.DEFAULT_T
     requested_session = " ".join(context.args).strip() if context.args else ""
 
     if not requested_session:
-        await update.message.reply_text("Error: session name is required")
+        await update.message.reply_text("삭제할 세션 이름을 입력해주세요.")
         return
 
     target_session = normalize_session_name(requested_session)
     active_session = get_active_session_name(user_id)
 
     if target_session == active_session:
-        await update.message.reply_text("Error: cannot delete the active session")
+        await update.message.reply_text("현재 사용 중인 세션은 삭제할 수 없어요.")
         return
 
     if target_session == DEFAULT_SESSION_NAME:
-        await update.message.reply_text("Error: cannot delete the default session")
+        await update.message.reply_text("기본 세션은 삭제할 수 없어요.")
         return
 
+    deleted = False
     lock = get_user_lock(user_id)
     async with lock:
         per_session = ensure_user_sessions(user_id)
-        if target_session not in per_session:
-            await update.message.reply_text(f"Error: session not found: {target_session}")
-            return
+        if target_session in per_session:
+            per_session.pop(target_session, None)
+            save_bot_state()
+            deleted = True
 
-        per_session.pop(target_session, None)
-        save_bot_state()
+    if not deleted:
+        await update.message.reply_text(f"세션을 찾을 수 없어요: {target_session}")
+        return
 
-    await update.message.reply_text(f"Session deleted: {target_session}")
+    await update.message.reply_text(f"세션이 삭제되었습니다: {target_session}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

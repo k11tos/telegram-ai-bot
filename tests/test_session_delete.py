@@ -20,7 +20,7 @@ def test_session_delete_existing(make_update_context):
     asyncio.run(bot.session_delete_command(update, context))
 
     assert "coding" not in bot.ensure_user_sessions(user_id)
-    assert update.message.replies[-1] == "Session deleted: coding"
+    assert update.message.replies[-1] == "세션이 삭제되었습니다: coding"
 
 
 def test_session_delete_active_error(make_update_context):
@@ -40,7 +40,7 @@ def test_session_delete_active_error(make_update_context):
     asyncio.run(bot.session_delete_command(update, context))
 
     assert "coding" in bot.ensure_user_sessions(user_id)
-    assert update.message.replies[-1] == "Error: cannot delete the active session"
+    assert update.message.replies[-1] == "현재 사용 중인 세션은 삭제할 수 없어요."
 
 
 def test_session_delete_default_error(make_update_context):
@@ -60,7 +60,7 @@ def test_session_delete_default_error(make_update_context):
     asyncio.run(bot.session_delete_command(update, context))
 
     assert bot.DEFAULT_SESSION_NAME in bot.ensure_user_sessions(user_id)
-    assert update.message.replies[-1] == "Error: cannot delete the default session"
+    assert update.message.replies[-1] == "기본 세션은 삭제할 수 없어요."
 
 
 def test_session_delete_missing_error(make_update_context):
@@ -78,4 +78,4 @@ def test_session_delete_missing_error(make_update_context):
 
     asyncio.run(bot.session_delete_command(update, context))
 
-    assert update.message.replies[-1] == "Error: session not found: coding"
+    assert update.message.replies[-1] == "세션을 찾을 수 없어요: coding"
