@@ -38,9 +38,9 @@ def test_load_gateway_presets_uses_gateway_data_when_available():
         payload={
             "presets": [
                 {
-                    "name": "Research",
+                    "name": " Research ",
                     "description": "Research mode",
-                    "prompt_prefix": "Preset: research.",
+                    "prompt_prefix": "  Preset: research.\n",
                 }
             ]
         }
@@ -50,10 +50,11 @@ def test_load_gateway_presets_uses_gateway_data_when_available():
     asyncio.run(bot.load_gateway_presets(app))
 
     assert client.calls[0]["path"] == bot.AI_GATEWAY_PRESETS_PATH
+    # prompt_prefix should be preserved exactly as provided by gateway
     assert app.bot_data[bot.PRESETS_KEY] == {
         "research": {
             "description": "Research mode",
-            "prompt_prefix": "Preset: research.",
+            "prompt_prefix": "  Preset: research.\n",
         }
     }
 

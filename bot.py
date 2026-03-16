@@ -305,7 +305,7 @@ def normalize_gateway_presets(payload) -> dict[str, dict[str, str]]:
         prompt_prefix = item.get("prompt_prefix")
         normalized[name] = {
             "description": description.strip() if isinstance(description, str) else "",
-            "prompt_prefix": prompt_prefix.strip() if isinstance(prompt_prefix, str) else "",
+            "prompt_prefix": prompt_prefix if isinstance(prompt_prefix, str) else "",
         }
 
     return normalized
