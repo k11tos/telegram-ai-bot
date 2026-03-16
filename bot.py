@@ -773,6 +773,10 @@ async def session_rename_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("기본 세션 이름은 변경할 수 없어요.")
         return
 
+    if new_session == DEFAULT_SESSION_NAME:
+        await update.message.reply_text("기본 세션 이름으로는 변경할 수 없어요.")
+        return
+
     renamed = False
     duplicate_name = False
     active_session = get_active_session_name(user_id)

@@ -162,3 +162,24 @@ def test_session_rename_uses_quoted_raw_text_parsing(make_update_context):
     assert "my project" not in renamed_sessions
     assert renamed_sessions["new project"] == ["User: notes"]
     assert update.message.replies[-1] == "세션 이름이 변경되었습니다: my project → new project"
+
+
+def test_session_rename_rejects_target_default_name(make_update_context):
+    user_id = 309
+    sessions = bot.ensure_user_sessions(user_id)
+    sessions["coding"] = ["User: code"]
+
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/session_rename coding default",
+        client=None,
+        args=["coding", "default"],
+    )
+
+    asyncio.run(bot.session_rename_command(update, context))
+
+    per_session = bot.ensure_user_sessions(user_id)
+    assert "coding" in per_session
+    assert bot.DEFAULT_SESSION_NAME not in per_session
+    assert per_session["coding"] == ["User: code"]
+    assert update.message.replies[-1] == "기본 세션 이름으로는 변경할 수 없어요."
