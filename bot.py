@@ -25,6 +25,7 @@ AI_GATEWAY_BASE_URL = os.getenv("AI_GATEWAY_BASE_URL")
 AI_GATEWAY_CHAT_PATH = "/chat"
 AI_GATEWAY_STREAM_PATH = "/generate_stream"
 AI_GATEWAY_MODELS_PATH = "/models"
+AI_GATEWAY_PRESETS_PATH = "/presets"
 AI_GATEWAY_READY_PATH = "/health/ready"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
@@ -91,17 +92,26 @@ LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
 STATE_FILE_NAME = "bot_state.json"
 STATE_FILE_PATH = os.path.join(LOCAL_DATA_DIR, STATE_FILE_NAME)
 
-SUPPORTED_PRESETS = ("normal", "coder", "english", "quant")
 DEFAULT_PRESET = "normal"
-PRESET_PROMPT_PREFIXES = {
-    "normal": "",
-    "coder": "Preset: coder. Focus on practical coding help.",
-    "english": "Preset: english. Reply in English unless asked otherwise.",
-    "quant": "Preset: quant. Prefer quantitative reasoning and clear assumptions.",
+STATIC_PRESET_DEFINITIONS = {
+    "normal": {"description": "기본 응답 스타일", "prompt_prefix": ""},
+    "coder": {
+        "description": "실용적인 코딩 중심 답변",
+        "prompt_prefix": "Preset: coder. Focus on practical coding help.\n\n",
+    },
+    "english": {
+        "description": "영어 우선 답변",
+        "prompt_prefix": "Preset: english. Reply in English unless asked otherwise.\n\n",
+    },
+    "quant": {
+        "description": "정량적 추론 중심 답변",
+        "prompt_prefix": "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n",
+    },
 }
+PRESETS_KEY = "presets"
 
-if set(PRESET_PROMPT_PREFIXES.keys()) != set(SUPPORTED_PRESETS):
-    raise AssertionError("SUPPORTED_PRESETS and PRESET_PROMPT_PREFIXES keys must match exactly")
+if DEFAULT_PRESET not in STATIC_PRESET_DEFINITIONS:
+    raise AssertionError("DEFAULT_PRESET must exist in STATIC_PRESET_DEFINITIONS")
 
 MAX_HISTORY = 10
 DEFAULT_SESSION_NAME = "default"
@@ -247,7 +257,7 @@ def load_bot_state() -> None:
                         if not isinstance(preset, str):
                             continue
                         normalized_preset = preset.strip().lower()
-                        if normalized_preset in SUPPORTED_PRESETS:
+                        if normalized_preset:
                             loaded_presets[user_id] = normalized_preset
 
     conversations.clear()
@@ -258,6 +268,80 @@ def load_bot_state() -> None:
     user_selected_models.update(loaded_models)
     user_selected_presets.clear()
     user_selected_presets.update(loaded_presets)
+
+
+def get_static_presets() -> dict[str, dict[str, str]]:
+    return {
+        name: {
+            "description": preset["description"],
+            "prompt_prefix": preset["prompt_prefix"],
+        }
+        for name, preset in STATIC_PRESET_DEFINITIONS.items()
+    }
+
+
+def normalize_gateway_presets(payload) -> dict[str, dict[str, str]]:
+    if isinstance(payload, dict) and isinstance(payload.get("presets"), list):
+        source = payload["presets"]
+    elif isinstance(payload, list):
+        source = payload
+    else:
+        source = []
+
+    normalized: dict[str, dict[str, str]] = {}
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+
+        raw_name = item.get("name")
+        if not isinstance(raw_name, str):
+            continue
+
+        name = raw_name.strip().lower()
+        if not name:
+            continue
+
+        description = item.get("description")
+        prompt_prefix = item.get("prompt_prefix")
+        normalized[name] = {
+            "description": description.strip() if isinstance(description, str) else "",
+            "prompt_prefix": prompt_prefix if isinstance(prompt_prefix, str) else "",
+        }
+
+    return normalized
+
+
+def get_presets_from_bot_data(bot_data: dict | None = None) -> dict[str, dict[str, str]]:
+    if isinstance(bot_data, dict):
+        presets = bot_data.get(PRESETS_KEY)
+        if isinstance(presets, dict) and presets:
+            return presets
+    return get_static_presets()
+
+
+def get_supported_preset_names(bot_data: dict | None = None) -> tuple[str, ...]:
+    return tuple(get_presets_from_bot_data(bot_data).keys())
+
+
+async def load_gateway_presets(app) -> None:
+    fallback_presets = get_static_presets()
+    client = app.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        app.bot_data[PRESETS_KEY] = fallback_presets
+        return
+
+    request_id = uuid.uuid4().hex[:12]
+    try:
+        response = await client.get(
+            AI_GATEWAY_PRESETS_PATH,
+            headers={"X-Request-Id": request_id},
+        )
+        response.raise_for_status()
+        gateway_presets = normalize_gateway_presets(response.json())
+        app.bot_data[PRESETS_KEY] = gateway_presets or fallback_presets
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        logger.warning("preset_load_failed request_id=%s error=%s", request_id, error)
+        app.bot_data[PRESETS_KEY] = fallback_presets
 
 
 def normalize_session_name(raw_name: str) -> str:
@@ -534,29 +618,39 @@ def get_user_selected_model(user_id: int) -> str | None:
     return normalized_model or None
 
 
-def get_user_selected_preset(user_id: int) -> str | None:
+def get_user_selected_preset(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str | None:
     selected_preset = user_selected_presets.get(user_id)
     if not isinstance(selected_preset, str):
         return None
 
     normalized_preset = selected_preset.strip().lower()
-    if normalized_preset not in SUPPORTED_PRESETS:
+    available_presets = presets if presets is not None else get_static_presets()
+    if normalized_preset not in available_presets:
         return None
 
     return normalized_preset
 
 
-def resolve_active_preset(user_id: int) -> str:
-    return get_user_selected_preset(user_id) or DEFAULT_PRESET
+def resolve_active_preset(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str:
+    available_presets = presets if presets is not None else get_static_presets()
+    if DEFAULT_PRESET not in available_presets and available_presets:
+        return next(iter(available_presets.keys()))
+    return get_user_selected_preset(user_id, available_presets) or DEFAULT_PRESET
 
 
-def build_prompt_with_preset(history_lines: list[str], active_preset: str) -> str:
+def build_prompt_with_preset(
+    history_lines: list[str],
+    active_preset: str,
+    presets: dict[str, dict[str, str]] | None = None,
+) -> str:
     prompt = "\n".join(history_lines) + "\nAI:"
-    preset_prefix = PRESET_PROMPT_PREFIXES.get(active_preset, "")
+    available_presets = presets if presets is not None else get_static_presets()
+    preset_definition = available_presets.get(active_preset, {})
+    preset_prefix = preset_definition.get("prompt_prefix", "")
     if not preset_prefix:
         return prompt
 
-    return f"{preset_prefix}\n\n{prompt}"
+    return f"{preset_prefix}{prompt}"
 
 
 def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dict[str, str]:
@@ -797,9 +891,11 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     requested_preset = " ".join(context.args).strip().lower() if context.args else ""
 
+    presets = get_presets_from_bot_data(context.application.bot_data)
+
     if requested_preset:
-        if requested_preset not in SUPPORTED_PRESETS:
-            supported_presets_text = ", ".join(SUPPORTED_PRESETS)
+        if requested_preset not in presets:
+            supported_presets_text = ", ".join(presets.keys())
             await update.message.reply_text(
                 f"지원하지 않는 프리셋입니다. 사용 가능: {supported_presets_text}"
             )
@@ -812,7 +908,7 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"프리셋이 변경되었습니다: {requested_preset}")
         return
 
-    active_preset = resolve_active_preset(user_id)
+    active_preset = resolve_active_preset(user_id, presets)
     await update.message.reply_text(f"현재 프리셋: {active_preset}")
 
 
@@ -906,6 +1002,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"request_start request_id={request_id} user_id={user_id} chat_id={chat_id}")
 
+    presets = get_presets_from_bot_data(context.application.bot_data)
     lock = get_user_lock(user_id)
 
     # Keep the per-user lock scope minimal: only protect shared state reads/writes
@@ -938,7 +1035,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
         selected_model = get_user_selected_model(user_id)
-        active_preset = resolve_active_preset(user_id)
+        active_preset = resolve_active_preset(user_id, presets)
 
     try:
         try:
@@ -957,7 +1054,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     finalize_condition.notify_all()
             return
 
-        prompt = build_prompt_with_preset(new_history, active_preset)
+        prompt = build_prompt_with_preset(new_history, active_preset, presets)
         payload = build_gateway_payload(prompt, selected_model)
         gateway_headers = {"X-Request-Id": request_id}
         client = context.application.bot_data.get(HTTP_CLIENT_KEY)
@@ -1332,6 +1429,7 @@ async def init_http_client(app):
         timeout=timeout,
         limits=limits,
     )
+    await load_gateway_presets(app)
 
 
 async def close_http_client(app):

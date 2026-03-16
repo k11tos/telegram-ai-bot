@@ -494,33 +494,33 @@ def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_u
 
 
 def test_preset_constants_are_defined_centrally():
-    assert bot.SUPPORTED_PRESETS == ("normal", "coder", "english", "quant")
+    assert tuple(bot.STATIC_PRESET_DEFINITIONS.keys()) == ("normal", "coder", "english", "quant")
     assert bot.DEFAULT_PRESET == "normal"
-    assert set(bot.PRESET_PROMPT_PREFIXES.keys()) == set(bot.SUPPORTED_PRESETS)
+    assert set(bot.STATIC_PRESET_DEFINITIONS.keys()) == {"normal", "coder", "english", "quant"}
 
 
 def test_preset_prefix_string_values_are_fixed():
-    assert bot.PRESET_PROMPT_PREFIXES["coder"] == "Preset: coder. Focus on practical coding help."
-    assert bot.PRESET_PROMPT_PREFIXES["english"] == "Preset: english. Reply in English unless asked otherwise."
-    assert bot.PRESET_PROMPT_PREFIXES["quant"] == "Preset: quant. Prefer quantitative reasoning and clear assumptions."
+    assert bot.STATIC_PRESET_DEFINITIONS["coder"]["prompt_prefix"] == "Preset: coder. Focus on practical coding help.\n\n"
+    assert bot.STATIC_PRESET_DEFINITIONS["english"]["prompt_prefix"] == "Preset: english. Reply in English unless asked otherwise.\n\n"
+    assert bot.STATIC_PRESET_DEFINITIONS["quant"]["prompt_prefix"] == "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n"
 
 
 def test_build_prompt_with_preset_starts_with_coder_prefix():
     prompt = bot.build_prompt_with_preset(["User: hi"], "coder")
 
-    assert prompt.startswith(f"{bot.PRESET_PROMPT_PREFIXES['coder']}\n\n")
+    assert prompt.startswith(f"{bot.STATIC_PRESET_DEFINITIONS['coder']['prompt_prefix']}")
 
 
 def test_build_prompt_with_preset_starts_with_english_prefix():
     prompt = bot.build_prompt_with_preset(["User: hi"], "english")
 
-    assert prompt.startswith(f"{bot.PRESET_PROMPT_PREFIXES['english']}\n\n")
+    assert prompt.startswith(f"{bot.STATIC_PRESET_DEFINITIONS['english']['prompt_prefix']}")
 
 
 def test_build_prompt_with_preset_starts_with_quant_prefix():
     prompt = bot.build_prompt_with_preset(["User: hi"], "quant")
 
-    assert prompt.startswith(f"{bot.PRESET_PROMPT_PREFIXES['quant']}\n\n")
+    assert prompt.startswith(f"{bot.STATIC_PRESET_DEFINITIONS['quant']['prompt_prefix']}")
 
 
 def test_build_prompt_with_normal_preset_keeps_existing_prompt_format():
@@ -543,7 +543,7 @@ def test_handle_message_uses_active_preset_prefix_for_non_default_preset(make_up
     asyncio.run(bot.handle_message(update, context))
 
     expected_prompt = (
-        f"{bot.PRESET_PROMPT_PREFIXES['coder']}\n\n"
+        f"{bot.STATIC_PRESET_DEFINITIONS['coder']['prompt_prefix']}"
         "User: 리팩토링 해줘\nAI:"
     )
     assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
@@ -599,7 +599,7 @@ def test_setting_english_preset_via_command_applies_to_followup_message(make_upd
     asyncio.run(bot.handle_message(message_update, message_context))
 
     expected_prompt = (
-        f"{bot.PRESET_PROMPT_PREFIXES['english']}\n\n"
+        f"{bot.STATIC_PRESET_DEFINITIONS['english']['prompt_prefix']}"
         "User: Please summarize\nAI:"
     )
     assert bot.user_selected_presets[user_id] == "english"
@@ -620,7 +620,7 @@ def test_english_preset_prefix_is_applied_to_prompt(make_update_context):
     asyncio.run(bot.handle_message(update, context))
 
     expected_prompt = (
-        f"{bot.PRESET_PROMPT_PREFIXES['english']}\n\n"
+        f"{bot.STATIC_PRESET_DEFINITIONS['english']['prompt_prefix']}"
         "User: Please answer\nAI:"
     )
     assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
@@ -640,7 +640,7 @@ def test_quant_preset_prefix_is_applied_to_prompt(make_update_context):
     asyncio.run(bot.handle_message(update, context))
 
     expected_prompt = (
-        f"{bot.PRESET_PROMPT_PREFIXES['quant']}\n\n"
+        f"{bot.STATIC_PRESET_DEFINITIONS['quant']['prompt_prefix']}"
         "User: 분석해줘\nAI:"
     )
     assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}

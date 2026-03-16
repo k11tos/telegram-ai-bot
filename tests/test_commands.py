@@ -313,7 +313,7 @@ def test_preset_command_rejects_unsupported_preset(make_update_context):
 
     assert bot.user_selected_presets.get(user_id) is None
     assert update.message.replies[-1] == (
-        "지원하지 않는 프리셋입니다. 사용 가능: " + ", ".join(bot.SUPPORTED_PRESETS)
+        "지원하지 않는 프리셋입니다. 사용 가능: " + ", ".join(bot.get_static_presets().keys())
     )
 
 
@@ -660,7 +660,7 @@ def test_load_bot_state_trims_and_filters_history_entries(tmp_path, monkeypatch)
     assert bot.get_session_history(3) == valid_lines[-bot.MAX_HISTORY :]
 
 
-def test_load_bot_state_ignores_invalid_presets_and_strips_model_values(tmp_path, monkeypatch):
+def test_load_bot_state_normalizes_presets_and_strips_model_values(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "bot_state.json"
@@ -674,7 +674,7 @@ def test_load_bot_state_ignores_invalid_presets_and_strips_model_values(tmp_path
     bot.load_bot_state()
 
     assert bot.user_selected_models == {1: "gpt-4o-mini"}
-    assert bot.user_selected_presets == {2: "coder"}
+    assert bot.user_selected_presets == {1: "not_supported", 2: "coder"}
 
 
 def test_load_bot_state_is_deterministic_across_repeated_calls(tmp_path, monkeypatch):
