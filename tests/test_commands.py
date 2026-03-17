@@ -30,6 +30,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/help" in reply
     assert "/model" in reply
     assert "/preset" in reply
+    assert "/reload_presets" in reply
     assert "/reset" in reply
     assert "/status" in reply
     assert "/version" in reply
@@ -365,6 +366,82 @@ def test_preset_command_normalizes_selected_preset_value(make_update_context):
     assert update.message.replies[-1] == "현재 프리셋: coder"
 
 
+def test_reload_presets_command_reloads_from_gateway(make_update_context):
+    client = FakeModelsClient(
+        payload={
+            "presets": [
+                {
+                    "name": "normal",
+                    "description": "기본",
+                    "prompt_prefix": "",
+                },
+                {
+                    "name": "coder",
+                    "description": "코딩",
+                    "prompt_prefix": "Preset: coder.\n\n",
+                },
+                {
+                    "name": "english",
+                    "description": "영어",
+                    "prompt_prefix": "Preset: english.\n\n",
+                },
+                {
+                    "name": "quant",
+                    "description": "정량",
+                    "prompt_prefix": "Preset: quant.\n\n",
+                },
+            ]
+        }
+    )
+    update, context = make_update_context(text="/reload_presets", client=client)
+
+    asyncio.run(bot.reload_presets_command(update, context))
+
+    assert client.calls[0]["path"] == bot.AI_GATEWAY_PRESETS_PATH
+    assert update.message.replies[-1] == "프리셋을 다시 불러왔습니다: normal, coder, english, quant"
+
+
+def test_reload_presets_command_falls_back_safely_on_gateway_failure(make_update_context):
+    request = httpx.Request("GET", "http://test/presets")
+    client = FakeModelsClient(get_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(text="/reload_presets", client=client)
+
+    asyncio.run(bot.reload_presets_command(update, context))
+
+    assert context.application.bot_data[bot.PRESETS_KEY] == bot.get_static_presets()
+    assert update.message.replies[-1] == "게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다."
+
+
+def test_preset_command_uses_reloaded_presets(make_update_context):
+    client = FakeModelsClient(
+        payload={
+            "presets": [
+                {
+                    "name": "research",
+                    "description": "리서치",
+                    "prompt_prefix": "Preset: research.\n\n",
+                }
+            ]
+        }
+    )
+    reload_update, reload_context = make_update_context(text="/reload_presets", client=client)
+
+    asyncio.run(bot.reload_presets_command(reload_update, reload_context))
+
+    preset_update, preset_context = make_update_context(
+        user_id=211,
+        text="/preset research",
+        client=client,
+        args=["research"],
+    )
+    preset_context.application.bot_data = reload_context.application.bot_data
+
+    asyncio.run(bot.preset_command(preset_update, preset_context))
+
+    assert bot.user_selected_presets[211] == "research"
+    assert preset_update.message.replies[-1] == "프리셋이 변경되었습니다: research"
+
+
 def test_session_command_shows_current_default_session(make_update_context):
     update, context = make_update_context(text="/session", client=None)
 
@@ -523,6 +600,15 @@ def test_main_registers_health_command_handler(monkeypatch):
     ]
     assert len(health_handlers) == 1
     assert health_handlers[0].callback == bot.health_command
+
+    reload_presets_handlers = [
+        handler
+        for handler in fake_builder.app.handlers
+        if "reload_presets" in getattr(handler, "commands", set())
+    ]
+    assert len(reload_presets_handlers) == 1
+    assert reload_presets_handlers[0].callback == bot.reload_presets_command
+
     assert fake_builder.app.run_polling_called is True
 
 

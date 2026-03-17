@@ -128,6 +128,7 @@ HELP_LINES = [
     "/help - 명령어 안내",
     "/model - 현재 적용 중인 모델 확인",
     "/preset [name] - 현재 프리셋 확인 또는 변경",
+    "/reload_presets - 게이트웨이 프리셋 다시 불러오기",
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
     "/session [name] - 현재 세션 확인 또는 변경",
@@ -327,12 +328,12 @@ def get_supported_preset_names(bot_data: dict | None = None) -> tuple[str, ...]:
     return tuple(get_presets_from_bot_data(bot_data).keys())
 
 
-async def load_gateway_presets(app) -> None:
+async def load_gateway_presets(app) -> dict[str, bool]:
     fallback_presets = get_static_presets()
     client = app.bot_data.get(HTTP_CLIENT_KEY)
     if client is None:
         app.bot_data[PRESETS_KEY] = fallback_presets
-        return
+        return {"loaded_from_gateway": False, "used_fallback": True}
 
     request_id = uuid.uuid4().hex[:12]
     try:
@@ -342,10 +343,27 @@ async def load_gateway_presets(app) -> None:
         )
         response.raise_for_status()
         gateway_presets = normalize_gateway_presets(response.json())
-        app.bot_data[PRESETS_KEY] = gateway_presets or fallback_presets
+        if gateway_presets:
+            app.bot_data[PRESETS_KEY] = gateway_presets
+            return {"loaded_from_gateway": True, "used_fallback": False}
+
+        app.bot_data[PRESETS_KEY] = fallback_presets
+        return {"loaded_from_gateway": False, "used_fallback": True}
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
         logger.warning("preset_load_failed request_id=%s error=%s", request_id, error)
         app.bot_data[PRESETS_KEY] = fallback_presets
+        return {"loaded_from_gateway": False, "used_fallback": True}
+
+
+async def reload_presets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    load_result = await load_gateway_presets(context.application)
+    presets = get_presets_from_bot_data(context.application.bot_data)
+
+    if load_result["loaded_from_gateway"]:
+        await update.message.reply_text(f"프리셋을 다시 불러왔습니다: {', '.join(presets.keys())}")
+        return
+
+    await update.message.reply_text("게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다.")
 
 
 def normalize_session_name(raw_name: str) -> str:
@@ -1581,6 +1599,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("model", model_command))
     app.add_handler(CommandHandler("preset", preset_command))
+    app.add_handler(CommandHandler("reload_presets", reload_presets_command))
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("session", session_command))
