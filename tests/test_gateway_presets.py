@@ -47,8 +47,9 @@ def test_load_gateway_presets_uses_gateway_data_when_available():
     )
     app = SimpleNamespace(bot_data={bot.HTTP_CLIENT_KEY: client})
 
-    asyncio.run(bot.load_gateway_presets(app))
+    result = asyncio.run(bot.load_gateway_presets(app))
 
+    assert result == {"loaded_from_gateway": True, "used_fallback": False}
     assert client.calls[0]["path"] == bot.AI_GATEWAY_PRESETS_PATH
     # prompt_prefix should be preserved exactly as provided by gateway
     assert app.bot_data[bot.PRESETS_KEY] == {
@@ -64,8 +65,9 @@ def test_load_gateway_presets_falls_back_to_static_when_gateway_fails():
     client = FakePresetClient(get_error=httpx.RequestError("down", request=request))
     app = SimpleNamespace(bot_data={bot.HTTP_CLIENT_KEY: client})
 
-    asyncio.run(bot.load_gateway_presets(app))
+    result = asyncio.run(bot.load_gateway_presets(app))
 
+    assert result == {"loaded_from_gateway": False, "used_fallback": True}
     assert app.bot_data[bot.PRESETS_KEY] == bot.get_static_presets()
 
 
