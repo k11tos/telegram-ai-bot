@@ -418,12 +418,35 @@ def test_preset_command_uses_refreshed_values_after_reload(make_update_context):
 
     assert preset_update.message.replies[-1] == "프리셋이 변경되었습니다: research"
 
-def test_session_command_shows_current_default_session(make_update_context):
+def test_session_command_no_arg_single_session(make_update_context):
     update, context = make_update_context(text="/session", client=None)
 
     asyncio.run(bot.session_command(update, context))
 
-    assert update.message.replies[-1] == "현재 세션: default"
+    assert update.message.replies[-1] == (
+        "현재 세션: default\n"
+        "전체 세션 수: 1\n\n"
+        "보유한 세션:\n"
+        "- default"
+    )
+
+
+def test_session_command_no_arg_multiple_sessions(make_update_context):
+    user_id = 320
+    bot.ensure_user_sessions(user_id)["trading"] = ["User: market"]
+    bot.ensure_user_sessions(user_id)["coding"] = ["User: python"]
+    bot.user_active_sessions[user_id] = "trading"
+    update, context = make_update_context(user_id=user_id, text="/session", client=None)
+
+    asyncio.run(bot.session_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "현재 세션: trading\n"
+        "전체 세션 수: 2\n\n"
+        "보유한 세션:\n"
+        "- coding\n"
+        "- trading"
+    )
 
 
 def test_session_command_switches_session(make_update_context):

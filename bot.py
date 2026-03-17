@@ -728,7 +728,25 @@ async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     requested_session = " ".join(context.args).strip() if context.args else ""
 
     if not requested_session:
-        await update.message.reply_text(f"현재 세션: {get_active_session_name(user_id)}")
+        active_session = get_active_session_name(user_id)
+        per_session = ensure_user_sessions(user_id)
+        per_session.setdefault(active_session, get_session_history(user_id, active_session))
+        session_names = sorted(per_session.keys())
+        available_sessions_lines = "\n".join(f"- {name}" for name in session_names)
+        if not available_sessions_lines:
+            available_sessions_lines = "- (none)"
+
+        await update.message.reply_text(
+            "\n".join(
+                [
+                    f"현재 세션: {active_session}",
+                    f"전체 세션 수: {len(session_names)}",
+                    "",
+                    "보유한 세션:",
+                    available_sessions_lines,
+                ]
+            )
+        )
         return
 
     next_session = normalize_session_name(requested_session)
