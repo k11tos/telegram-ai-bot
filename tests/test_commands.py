@@ -726,3 +726,60 @@ def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatc
     assert bot.conversations == {}
     assert bot.user_selected_models == {}
     assert bot.user_selected_presets == {}
+
+def test_help_command_includes_reload_presets_command(make_update_context):
+    update, context = make_update_context(text="/help", client=None)
+
+    asyncio.run(bot.help_command(update, context))
+
+    reply = update.message.replies[0]
+    assert "/reload_presets" in reply
+
+
+def test_main_registers_reload_presets_command_handler(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.handlers = []
+            self.run_polling_called = False
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+        def run_polling(self):
+            self.run_polling_called = True
+
+    class FakeBuilder:
+        def __init__(self):
+            self.app = FakeApp()
+
+        def token(self, value):
+            self.token_value = value
+            return self
+
+        def post_init(self, callback):
+            self.post_init_callback = callback
+            return self
+
+        def post_shutdown(self, callback):
+            self.post_shutdown_callback = callback
+            return self
+
+        def build(self):
+            return self.app
+
+    fake_builder = FakeBuilder()
+
+    monkeypatch.setattr(bot, "BOT_TOKEN", "dummy-token")
+    monkeypatch.setattr(bot, "AI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setattr(bot, "ApplicationBuilder", lambda: fake_builder)
+
+    bot.main()
+
+    reload_handlers = [
+        handler
+        for handler in fake_builder.app.handlers
+        if "reload_presets" in getattr(handler, "commands", set())
+    ]
+    assert len(reload_handlers) == 1
+    assert reload_handlers[0].callback == bot.reload_presets_command
+    assert fake_builder.app.run_polling_called is True
