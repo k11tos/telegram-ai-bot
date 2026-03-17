@@ -120,6 +120,15 @@ def test_help_command_includes_session_rename_command(make_update_context):
     assert "/session_rename" in reply
 
 
+def test_help_command_includes_session_clear_command(make_update_context):
+    update, context = make_update_context(text="/help", client=None)
+
+    asyncio.run(bot.help_command(update, context))
+
+    reply = update.message.replies[0]
+    assert "/session_clear" in reply
+
+
 
 
 def test_health_command_reports_gateway_ready(make_update_context):

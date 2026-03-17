@@ -132,6 +132,7 @@ HELP_LINES = [
     "/health - AI 게이트웨이 준비 상태 확인",
     "/session [name] - 현재 세션 확인 또는 변경",
     "/session_rename <old> <new> - 세션 이름 변경",
+    "/session_clear <name> - 세션 기록만 비우기",
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/reset - 대화 기록 초기화",
@@ -838,6 +839,34 @@ async def session_delete_command(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     await update.message.reply_text(f"세션이 삭제되었습니다: {target_session}")
+
+
+async def session_clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    requested_session = " ".join(context.args).strip() if context.args else ""
+
+    if not requested_session:
+        await update.message.reply_text("비울 세션 이름을 입력해주세요.")
+        return
+
+    target_session = normalize_session_name(requested_session)
+
+    cleared = False
+    lock = get_user_lock(user_id)
+    async with lock:
+        per_session = ensure_user_sessions(user_id)
+        if target_session in per_session:
+            per_session[target_session] = []
+            if target_session == get_active_session_name(user_id):
+                increment_session_reset_token(user_id, target_session)
+            save_bot_state()
+            cleared = True
+
+    if not cleared:
+        await update.message.reply_text(f"세션을 찾을 수 없어요: {target_session}")
+        return
+
+    await update.message.reply_text(f"세션 기록을 비웠습니다: {target_session}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1556,6 +1585,7 @@ def main():
     app.add_handler(CommandHandler("health", health_command))
     app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("session_rename", session_rename_command))
+    app.add_handler(CommandHandler("session_clear", session_clear_command))
     app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
     app.add_handler(CommandHandler("reset", reset))
