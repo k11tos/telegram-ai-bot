@@ -28,6 +28,7 @@ AI_GATEWAY_STREAM_PATH = "/generate_stream"
 AI_GATEWAY_MODELS_PATH = "/models"
 AI_GATEWAY_PRESETS_PATH = "/presets"
 AI_GATEWAY_READY_PATH = "/health/ready"
+AI_GATEWAY_AGENT_BRAIN_PATH = "/agent/brain"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
 
@@ -681,6 +682,38 @@ def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dic
     if selected_model:
         payload["model"] = selected_model
     return payload
+
+
+class GatewayClientError(Exception):
+    """Controlled gateway client error for recoverable request/response failures."""
+
+
+async def post_agent_brain(
+    client: httpx.AsyncClient,
+    payload: dict,
+    request_id: str | None = None,
+) -> dict:
+    headers = {"X-Request-Id": request_id} if request_id else None
+
+    try:
+        response = await client.post(
+            AI_GATEWAY_AGENT_BRAIN_PATH,
+            json=payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+    except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as error:
+        raise GatewayClientError("agent_brain_request_failed") from error
+
+    try:
+        body = response.json()
+    except ValueError as error:
+        raise GatewayClientError("agent_brain_invalid_json") from error
+
+    if not isinstance(body, dict):
+        raise GatewayClientError("agent_brain_malformed_response")
+
+    return body
 
 
 def is_supported_document(file_name: str | None) -> bool:
