@@ -132,6 +132,7 @@ HELP_LINES = [
     "/reload_presets - 게이트웨이 프리셋 다시 불러오기",
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
+    "/brain - 시스템 브리핑 요약",
     "/session [name] - 현재 세션 확인 또는 변경",
     "/session_rename <old> <new> - 세션 이름 변경",
     "/session_clear <name> - 세션 기록만 비우기",
@@ -716,6 +717,30 @@ async def post_agent_brain(
     return body
 
 
+def build_brain_message(overall_status: str, message_lines: list[str]) -> str:
+    normalized_status = overall_status.strip() if isinstance(overall_status, str) else ""
+    if not normalized_status:
+        normalized_status = "상태 정보를 확인하지 못했어요."
+
+    normalized_lines = [line.strip() for line in message_lines if isinstance(line, str) and line.strip()]
+    if not normalized_lines:
+        normalized_lines = ["브리핑 세부 항목이 비어 있어요."]
+
+    section_lines = "\n".join(f"- {line}" for line in normalized_lines)
+
+    return "\n".join(
+        [
+            "📊 오늘 브리핑",
+            "",
+            "[서버]",
+            section_lines,
+            "",
+            "[상태]",
+            f"- {normalized_status}",
+        ]
+    )
+
+
 def is_supported_document(file_name: str | None) -> bool:
     if not isinstance(file_name, str):
         return False
@@ -989,6 +1014,41 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"chat_id={chat_id} latency_ms={latency_ms}"
     )
     await update.message.reply_text("게이트웨이가 정상적으로 준비되어 있어요.")
+
+
+async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    request_id = uuid.uuid4().hex[:12]
+
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        await update.message.reply_text("게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    try:
+        brain_payload = await post_agent_brain(
+            client,
+            payload={},
+            request_id=request_id,
+        )
+    except GatewayClientError as error:
+        logger.warning(
+            "brain_command_failed request_id=%s user_id=%s chat_id=%s error=%s",
+            request_id,
+            user_id,
+            chat_id,
+            error,
+        )
+        await update.message.reply_text("브리핑 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    overall_status = brain_payload.get("overall_status")
+    message_lines = brain_payload.get("message_lines")
+    if not isinstance(message_lines, list):
+        message_lines = []
+
+    await update.message.reply_text(build_brain_message(overall_status, message_lines))
 
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1654,6 +1714,7 @@ def main():
     app.add_handler(CommandHandler("reload_presets", reload_presets_command))
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
+    app.add_handler(CommandHandler("brain", brain_command))
     app.add_handler(CommandHandler("session", session_command))
     app.add_handler(CommandHandler("session_rename", session_rename_command))
     app.add_handler(CommandHandler("session_clear", session_clear_command))
