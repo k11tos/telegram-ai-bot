@@ -111,6 +111,15 @@ def test_help_command_includes_models_command(make_update_context):
     assert "/models" in reply
 
 
+def test_help_command_includes_reload_presets_command(make_update_context):
+    update, context = make_update_context(text="/help", client=None)
+
+    asyncio.run(bot.help_command(update, context))
+
+    reply = update.message.replies[0]
+    assert "/reload_presets" in reply
+
+
 def test_help_command_includes_session_rename_command(make_update_context):
     update, context = make_update_context(text="/help", client=None)
 
@@ -363,6 +372,60 @@ def test_preset_command_normalizes_selected_preset_value(make_update_context):
     asyncio.run(bot.preset_command(update, context))
 
     assert update.message.replies[-1] == "현재 프리셋: coder"
+
+
+def test_reload_presets_command_uses_gateway_data(make_update_context):
+    client = FakeModelsClient(
+        payload={
+            "presets": [
+                {"name": "normal", "description": "기본", "prompt_prefix": ""},
+                {"name": "coder", "description": "코딩", "prompt_prefix": "Coder: "},
+                {"name": "english", "description": "영어", "prompt_prefix": "English: "},
+                {"name": "quant", "description": "정량", "prompt_prefix": "Quant: "},
+            ]
+        }
+    )
+    update, context = make_update_context(text="/reload_presets", client=client)
+
+    asyncio.run(bot.reload_presets_command(update, context))
+
+    assert update.message.replies[-1] == "프리셋을 다시 불러왔습니다: normal, coder, english, quant"
+    assert bot.get_presets_from_bot_data(context.application.bot_data)["coder"]["prompt_prefix"] == "Coder: "
+
+
+def test_reload_presets_command_falls_back_safely_on_failure(make_update_context):
+    request = httpx.Request("GET", "http://test/presets")
+    client = FakeModelsClient(get_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(text="/reload_presets", client=client)
+
+    asyncio.run(bot.reload_presets_command(update, context))
+
+    assert update.message.replies[-1] == "게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다."
+    assert bot.get_presets_from_bot_data(context.application.bot_data) == bot.get_static_presets()
+
+
+def test_preset_command_uses_reloaded_values_after_reload(make_update_context):
+    client = FakeModelsClient(
+        payload={
+            "presets": [
+                {"name": "normal", "description": "기본", "prompt_prefix": ""},
+                {"name": "focus", "description": "집중", "prompt_prefix": "Focus: "},
+            ]
+        }
+    )
+    reload_update, reload_context = make_update_context(text="/reload_presets", client=client)
+    asyncio.run(bot.reload_presets_command(reload_update, reload_context))
+
+    preset_update, preset_context = make_update_context(
+        text="/preset focus",
+        client=client,
+        args=["focus"],
+    )
+    preset_context.application = reload_context.application
+
+    asyncio.run(bot.preset_command(preset_update, preset_context))
+
+    assert preset_update.message.replies[-1] == "프리셋이 변경되었습니다: focus"
 
 
 def test_session_command_shows_current_default_session(make_update_context):
