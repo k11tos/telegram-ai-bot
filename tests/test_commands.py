@@ -35,6 +35,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/status" in reply
     assert "/version" in reply
     assert "/health" in reply
+    assert "/brain" in reply
     assert "/session" in reply
 
 
@@ -183,6 +184,111 @@ def test_health_command_handles_missing_client(make_update_context):
     asyncio.run(bot.health_command(update, context))
 
     assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+
+
+def test_brain_command_maps_ok_status_to_human_readable_korean(make_update_context):
+    client = FakeModelsClient(
+        post_payload={
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상", "디스크 사용률 71.2%", "메모리 사용률 53.4%"],
+        }
+    )
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert len(client.post_calls) == 1
+    assert client.post_calls[0]["path"] == bot.AI_GATEWAY_AGENT_BRAIN_PATH
+    assert client.post_calls[0]["json"] == {}
+    assert "X-Request-Id" in client.post_calls[0]["headers"]
+    assert isinstance(client.post_calls[0]["headers"]["X-Request-Id"], str)
+    assert client.post_calls[0]["headers"]["X-Request-Id"]
+    assert update.message.replies[-1] == (
+        "📊 오늘 브리핑\n"
+        "\n"
+        "[서버]\n"
+        "- ai-gateway 정상\n"
+        "- 디스크 사용률 71.2%\n"
+        "- 메모리 사용률 53.4%\n"
+        "\n"
+        "[상태]\n"
+        "- 현재 즉시 대응이 필요한 징후는 없습니다."
+    )
+
+
+def test_brain_command_maps_partial_status_to_human_readable_korean(make_update_context):
+    client = FakeModelsClient(
+        post_payload={
+            "overall_status": "partial",
+            "message_lines": ["ai-gateway 정상"],
+        }
+    )
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "📊 오늘 브리핑\n"
+        "\n"
+        "[서버]\n"
+        "- ai-gateway 정상\n"
+        "\n"
+        "[상태]\n"
+        "- 일부 상태 정보가 누락되어 있어 확인이 필요합니다."
+    )
+
+
+def test_brain_command_falls_back_for_unknown_or_missing_status(make_update_context):
+    unknown_client = FakeModelsClient(post_payload={"overall_status": "weird", "message_lines": ["ai-gateway 정상"]})
+    unknown_update, unknown_context = make_update_context(text="/brain", client=unknown_client)
+
+    asyncio.run(bot.brain_command(unknown_update, unknown_context))
+
+    assert unknown_update.message.replies[-1].endswith("- 상태 정보를 확인하지 못했어요.")
+
+    missing_client = FakeModelsClient(post_payload={"message_lines": ["ai-gateway 정상"]})
+    missing_update, missing_context = make_update_context(text="/brain", client=missing_client)
+
+    asyncio.run(bot.brain_command(missing_update, missing_context))
+
+    assert missing_update.message.replies[-1].endswith("- 상태 정보를 확인하지 못했어요.")
+
+
+def test_brain_command_handles_missing_client(make_update_context):
+    update, context = make_update_context(text="/brain", client=None)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+
+
+def test_brain_command_handles_gateway_failure(make_update_context):
+    request = httpx.Request("POST", "http://test/agent/brain")
+    client = FakeModelsClient(post_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == "브리핑 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+
+
+def test_brain_command_splits_long_briefing_into_multiple_replies(make_update_context):
+    long_line = "디스크 사용률 71.2% " + ("매우안정적 " * 900)
+    client = FakeModelsClient(
+        post_payload={
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"],
+        }
+    )
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    expected_message = bot.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
+    expected_chunks = bot.split_telegram_text(expected_message)
+
+    assert len(expected_chunks) > 1
+    assert update.message.replies == expected_chunks
 
 
 def test_model_command_shows_selected_model(make_update_context):
@@ -489,12 +595,27 @@ class FakeGetResponse:
 
 
 class FakeModelsClient:
-    def __init__(self, payload=None, get_error=None, status_error=None, json_error=None):
+    def __init__(
+        self,
+        payload=None,
+        get_error=None,
+        status_error=None,
+        json_error=None,
+        post_payload=None,
+        post_error=None,
+        post_status_error=None,
+        post_json_error=None,
+    ):
         self.payload = payload
         self.get_error = get_error
         self.status_error = status_error
         self.json_error = json_error
         self.calls = []
+        self.post_payload = post_payload
+        self.post_error = post_error
+        self.post_status_error = post_status_error
+        self.post_json_error = post_json_error
+        self.post_calls = []
 
     async def get(self, path, headers=None):
         self.calls.append({"path": path, "headers": headers})
@@ -504,6 +625,16 @@ class FakeModelsClient:
             payload=self.payload,
             status_error=self.status_error,
             json_error=self.json_error,
+        )
+
+    async def post(self, path, json=None, headers=None):
+        self.post_calls.append({"path": path, "json": json, "headers": headers})
+        if self.post_error is not None:
+            raise self.post_error
+        return FakeGetResponse(
+            payload=self.post_payload,
+            status_error=self.post_status_error,
+            json_error=self.post_json_error,
         )
 
 
