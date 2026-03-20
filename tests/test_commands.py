@@ -186,10 +186,10 @@ def test_health_command_handles_missing_client(make_update_context):
     assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
 
 
-def test_brain_command_reports_gateway_briefing(make_update_context):
+def test_brain_command_maps_ok_status_to_human_readable_korean(make_update_context):
     client = FakeModelsClient(
         post_payload={
-            "overall_status": "현재 즉시 대응이 필요한 징후는 없습니다.",
+            "overall_status": "ok",
             "message_lines": ["ai-gateway 정상", "디스크 사용률 71.2%", "메모리 사용률 53.4%"],
         }
     )
@@ -214,6 +214,44 @@ def test_brain_command_reports_gateway_briefing(make_update_context):
         "[상태]\n"
         "- 현재 즉시 대응이 필요한 징후는 없습니다."
     )
+
+
+def test_brain_command_maps_partial_status_to_human_readable_korean(make_update_context):
+    client = FakeModelsClient(
+        post_payload={
+            "overall_status": "partial",
+            "message_lines": ["ai-gateway 정상"],
+        }
+    )
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "📊 오늘 브리핑\n"
+        "\n"
+        "[서버]\n"
+        "- ai-gateway 정상\n"
+        "\n"
+        "[상태]\n"
+        "- 일부 상태 정보가 누락되어 있어 확인이 필요합니다."
+    )
+
+
+def test_brain_command_falls_back_for_unknown_or_missing_status(make_update_context):
+    unknown_client = FakeModelsClient(post_payload={"overall_status": "weird", "message_lines": ["ai-gateway 정상"]})
+    unknown_update, unknown_context = make_update_context(text="/brain", client=unknown_client)
+
+    asyncio.run(bot.brain_command(unknown_update, unknown_context))
+
+    assert unknown_update.message.replies[-1].endswith("- 상태 정보를 확인하지 못했어요.")
+
+    missing_client = FakeModelsClient(post_payload={"message_lines": ["ai-gateway 정상"]})
+    missing_update, missing_context = make_update_context(text="/brain", client=missing_client)
+
+    asyncio.run(bot.brain_command(missing_update, missing_context))
+
+    assert missing_update.message.replies[-1].endswith("- 상태 정보를 확인하지 못했어요.")
 
 
 def test_brain_command_handles_missing_client(make_update_context):

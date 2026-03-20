@@ -717,10 +717,19 @@ async def post_agent_brain(
     return body
 
 
-def build_brain_message(overall_status: str, message_lines: list[str]) -> str:
-    normalized_status = overall_status.strip() if isinstance(overall_status, str) else ""
-    if not normalized_status:
-        normalized_status = "상태 정보를 확인하지 못했어요."
+def format_brain_overall_status(overall_status: str | None) -> str:
+    normalized_status = overall_status.strip().lower() if isinstance(overall_status, str) else ""
+
+    if normalized_status == "ok":
+        return "현재 즉시 대응이 필요한 징후는 없습니다."
+    if normalized_status == "partial":
+        return "일부 상태 정보가 누락되어 있어 확인이 필요합니다."
+
+    return "상태 정보를 확인하지 못했어요."
+
+
+def build_brain_message(overall_status: str | None, message_lines: list[str]) -> str:
+    formatted_status = format_brain_overall_status(overall_status)
 
     normalized_lines = [line.strip() for line in message_lines if isinstance(line, str) and line.strip()]
     if not normalized_lines:
@@ -736,7 +745,7 @@ def build_brain_message(overall_status: str, message_lines: list[str]) -> str:
             section_lines,
             "",
             "[상태]",
-            f"- {normalized_status}",
+            f"- {formatted_status}",
         ]
     )
 
