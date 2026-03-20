@@ -1057,7 +1057,11 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not isinstance(message_lines, list):
         message_lines = []
 
-    await update.message.reply_text(build_brain_message(overall_status, message_lines))
+    final_message = build_brain_message(overall_status, message_lines)
+    message_chunks = split_telegram_text(final_message)
+    await update.message.reply_text(message_chunks[0])
+    for chunk in message_chunks[1:]:
+        await update.message.reply_text(chunk)
 
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

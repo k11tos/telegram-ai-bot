@@ -272,6 +272,25 @@ def test_brain_command_handles_gateway_failure(make_update_context):
     assert update.message.replies[-1] == "브리핑 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
 
 
+def test_brain_command_splits_long_briefing_into_multiple_replies(make_update_context):
+    long_line = "디스크 사용률 71.2% " + ("매우안정적 " * 900)
+    client = FakeModelsClient(
+        post_payload={
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"],
+        }
+    )
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    expected_message = bot.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
+    expected_chunks = bot.split_telegram_text(expected_message)
+
+    assert len(expected_chunks) > 1
+    assert update.message.replies == expected_chunks
+
+
 def test_model_command_shows_selected_model(make_update_context):
     user_id = 52
     bot.user_selected_models[user_id] = "gpt-4o-mini"
