@@ -51,17 +51,18 @@ def test_post_agent_brain_returns_dict_body():
 
 
 @pytest.mark.parametrize(
-    "post_error",
+    ("post_error", "expected_code"),
     [
-        httpx.ConnectTimeout("connect timeout"),
-        httpx.ReadTimeout("read timeout"),
-        httpx.RequestError("network down"),
+        (httpx.ConnectTimeout("connect timeout"), "agent_brain_timeout"),
+        (httpx.ReadTimeout("read timeout"), "agent_brain_timeout"),
+        (httpx.ConnectError("network down"), "agent_brain_connect_error"),
+        (httpx.RequestError("network down"), "agent_brain_request_failed"),
     ],
 )
-def test_post_agent_brain_raises_controlled_error_on_network_failures(post_error):
+def test_post_agent_brain_raises_controlled_error_on_network_failures(post_error, expected_code):
     client = FakeClient(post_error=post_error)
 
-    with pytest.raises(bot.GatewayClientError, match="agent_brain_request_failed"):
+    with pytest.raises(bot.GatewayClientError, match=expected_code):
         asyncio.run(bot.post_agent_brain(client, payload={"messages": []}))
 
 

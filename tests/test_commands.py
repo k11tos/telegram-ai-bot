@@ -298,17 +298,36 @@ def test_brain_command_handles_missing_client(make_update_context):
 
     asyncio.run(bot.brain_command(update, context))
 
-    assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+    assert update.message.replies[-1] == "gateway에 연결하지 못했습니다."
 
 
-def test_brain_command_handles_gateway_failure(make_update_context):
+def test_brain_command_handles_gateway_connection_failure(make_update_context):
     request = httpx.Request("POST", "http://test/agent/brain")
-    client = FakeModelsClient(post_error=httpx.RequestError("down", request=request))
+    client = FakeModelsClient(post_error=httpx.ConnectError("down", request=request))
     update, context = make_update_context(text="/brain", client=client)
 
     asyncio.run(bot.brain_command(update, context))
 
-    assert update.message.replies[-1] == "브리핑 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+    assert update.message.replies[-1] == "gateway에 연결하지 못했습니다."
+
+
+def test_brain_command_handles_gateway_timeout(make_update_context):
+    request = httpx.Request("POST", "http://test/agent/brain")
+    client = FakeModelsClient(post_error=httpx.ReadTimeout("slow", request=request))
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == "brain 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요."
+
+
+def test_brain_command_handles_malformed_gateway_response(make_update_context):
+    client = FakeModelsClient(post_payload=["not", "an", "object"])
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == "brain 응답 형식을 처리하지 못했습니다."
 
 
 def test_brain_command_splits_long_briefing_into_multiple_replies(make_update_context):

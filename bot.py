@@ -689,6 +689,10 @@ def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dic
 class GatewayClientError(Exception):
     """Controlled gateway client error for recoverable request/response failures."""
 
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
 
 async def post_agent_brain(
     client: httpx.AsyncClient,
@@ -704,7 +708,13 @@ async def post_agent_brain(
             headers=headers,
         )
         response.raise_for_status()
-    except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as error:
+    except httpx.TimeoutException as error:
+        raise GatewayClientError("agent_brain_timeout") from error
+    except httpx.ConnectError as error:
+        raise GatewayClientError("agent_brain_connect_error") from error
+    except httpx.RequestError as error:
+        raise GatewayClientError("agent_brain_request_failed") from error
+    except httpx.HTTPStatusError as error:
         raise GatewayClientError("agent_brain_request_failed") from error
 
     try:
@@ -1000,7 +1010,13 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     client = context.application.bot_data.get(HTTP_CLIENT_KEY)
     if client is None:
-        await update.message.reply_text("게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요.")
+        logger.warning(
+            "brain_gateway_client_missing request_id=%s user_id=%s chat_id=%s",
+            request_id,
+            user_id,
+            chat_id,
+        )
+        await update.message.reply_text("gateway에 연결하지 못했습니다.")
         return
 
     try:
@@ -1010,14 +1026,42 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             request_id=request_id,
         )
     except GatewayClientError as error:
-        logger.warning(
-            "brain_command_failed request_id=%s user_id=%s chat_id=%s error=%s",
-            request_id,
-            user_id,
-            chat_id,
-            error,
-        )
-        await update.message.reply_text("브리핑 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        if error.code == "agent_brain_timeout":
+            logger.warning(
+                "brain_gateway_timeout request_id=%s user_id=%s chat_id=%s",
+                request_id,
+                user_id,
+                chat_id,
+            )
+            fallback_message = "brain 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요."
+        elif error.code == "agent_brain_connect_error":
+            logger.warning(
+                "brain_gateway_connect_error request_id=%s user_id=%s chat_id=%s",
+                request_id,
+                user_id,
+                chat_id,
+            )
+            fallback_message = "gateway에 연결하지 못했습니다."
+        elif error.code in {"agent_brain_invalid_json", "agent_brain_malformed_response"}:
+            logger.warning(
+                "brain_gateway_malformed_response request_id=%s user_id=%s chat_id=%s error=%s",
+                request_id,
+                user_id,
+                chat_id,
+                error.code,
+            )
+            fallback_message = "brain 응답 형식을 처리하지 못했습니다."
+        else:
+            logger.warning(
+                "brain_command_failed request_id=%s user_id=%s chat_id=%s error=%s",
+                request_id,
+                user_id,
+                chat_id,
+                error.code,
+            )
+            fallback_message = "gateway에 연결하지 못했습니다."
+
+        await update.message.reply_text(fallback_message)
         return
 
     final_message = render_brain_payload(brain_payload)
