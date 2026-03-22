@@ -4,6 +4,7 @@ import json
 import httpx
 
 import bot
+import brain_formatter
 
 
 def test_reset_command_clears_conversation_and_replies(make_update_context):
@@ -322,7 +323,7 @@ def test_brain_command_splits_long_briefing_into_multiple_replies(make_update_co
 
     asyncio.run(bot.brain_command(update, context))
 
-    expected_message = bot.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
+    expected_message = brain_formatter.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
     expected_chunks = bot.split_telegram_text(expected_message)
 
     assert len(expected_chunks) > 1

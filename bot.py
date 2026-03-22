@@ -9,7 +9,7 @@ import time
 import uuid
 
 import httpx
-from brain_formatter import build_brain_message, render_brain_payload
+from brain_formatter import render_brain_payload
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
