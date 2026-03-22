@@ -9,6 +9,7 @@ import time
 import uuid
 
 import httpx
+from brain_formatter import render_brain_payload
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -717,39 +718,6 @@ async def post_agent_brain(
     return body
 
 
-def format_brain_overall_status(overall_status: str | None) -> str:
-    normalized_status = overall_status.strip().lower() if isinstance(overall_status, str) else ""
-
-    if normalized_status == "ok":
-        return "현재 즉시 대응이 필요한 징후는 없습니다."
-    if normalized_status == "partial":
-        return "일부 상태 정보가 누락되어 있어 확인이 필요합니다."
-
-    return "상태 정보를 확인하지 못했어요."
-
-
-def build_brain_message(overall_status: str | None, message_lines: list[str]) -> str:
-    formatted_status = format_brain_overall_status(overall_status)
-
-    normalized_lines = [line.strip() for line in message_lines if isinstance(line, str) and line.strip()]
-    if not normalized_lines:
-        normalized_lines = ["브리핑 세부 항목이 비어 있어요."]
-
-    section_lines = "\n".join(f"- {line}" for line in normalized_lines)
-
-    return "\n".join(
-        [
-            "📊 오늘 브리핑",
-            "",
-            "[서버]",
-            section_lines,
-            "",
-            "[상태]",
-            f"- {formatted_status}",
-        ]
-    )
-
-
 def is_supported_document(file_name: str | None) -> bool:
     if not isinstance(file_name, str):
         return False
@@ -1052,12 +1020,7 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("브리핑 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
         return
 
-    overall_status = brain_payload.get("overall_status")
-    message_lines = brain_payload.get("message_lines")
-    if not isinstance(message_lines, list):
-        message_lines = []
-
-    final_message = build_brain_message(overall_status, message_lines)
+    final_message = render_brain_payload(brain_payload)
     message_chunks = split_telegram_text(final_message)
     await update.message.reply_text(message_chunks[0])
     for chunk in message_chunks[1:]:

@@ -4,6 +4,7 @@ import json
 import httpx
 
 import bot
+import brain_formatter
 
 
 def test_reset_command_clears_conversation_and_replies(make_update_context):
@@ -212,7 +213,7 @@ def test_brain_command_maps_ok_status_to_human_readable_korean(make_update_conte
         "- 메모리 사용률 53.4%\n"
         "\n"
         "[상태]\n"
-        "- 현재 즉시 대응이 필요한 징후는 없습니다."
+        "✅ 안정"
     )
 
 
@@ -234,7 +235,7 @@ def test_brain_command_maps_partial_status_to_human_readable_korean(make_update_
         "- ai-gateway 정상\n"
         "\n"
         "[상태]\n"
-        "- 일부 상태 정보가 누락되어 있어 확인이 필요합니다."
+        "⚠️ 일부 정보 누락"
     )
 
 
@@ -244,15 +245,53 @@ def test_brain_command_falls_back_for_unknown_or_missing_status(make_update_cont
 
     asyncio.run(bot.brain_command(unknown_update, unknown_context))
 
-    assert unknown_update.message.replies[-1].endswith("- 상태 정보를 확인하지 못했어요.")
+    assert unknown_update.message.replies[-1].endswith("⚠️ 일부 정보 확인 불가")
 
     missing_client = FakeModelsClient(post_payload={"message_lines": ["ai-gateway 정상"]})
     missing_update, missing_context = make_update_context(text="/brain", client=missing_client)
 
     asyncio.run(bot.brain_command(missing_update, missing_context))
 
-    assert missing_update.message.replies[-1].endswith("- 상태 정보를 확인하지 못했어요.")
+    assert missing_update.message.replies[-1].endswith("⚠️ 일부 정보 확인 불가")
 
+
+
+def test_brain_command_maps_warning_status_to_human_readable_korean(make_update_context):
+    client = FakeModelsClient(
+        post_payload={
+            "overall_status": "warning",
+            "message_lines": ["디스크 사용률 92.1%"],
+        }
+    )
+    update, context = make_update_context(text="/brain", client=client)
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "📊 오늘 브리핑\n"
+        "\n"
+        "[서버]\n"
+        "- 디스크 사용률 92.1%\n"
+        "\n"
+        "[상태]\n"
+        "🚨 점검 필요"
+    )
+
+
+def test_brain_command_uses_fallback_message_when_lines_missing_or_empty(make_update_context):
+    missing_client = FakeModelsClient(post_payload={"overall_status": "ok"})
+    missing_update, missing_context = make_update_context(text="/brain", client=missing_client)
+
+    asyncio.run(bot.brain_command(missing_update, missing_context))
+
+    assert "- 브리핑 세부 정보가 아직 없어요." in missing_update.message.replies[-1]
+
+    empty_client = FakeModelsClient(post_payload={"overall_status": "ok", "message_lines": [" ", None]})
+    empty_update, empty_context = make_update_context(text="/brain", client=empty_client)
+
+    asyncio.run(bot.brain_command(empty_update, empty_context))
+
+    assert "- 브리핑 세부 정보가 아직 없어요." in empty_update.message.replies[-1]
 
 def test_brain_command_handles_missing_client(make_update_context):
     update, context = make_update_context(text="/brain", client=None)
@@ -284,7 +323,7 @@ def test_brain_command_splits_long_briefing_into_multiple_replies(make_update_co
 
     asyncio.run(bot.brain_command(update, context))
 
-    expected_message = bot.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
+    expected_message = brain_formatter.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
     expected_chunks = bot.split_telegram_text(expected_message)
 
     assert len(expected_chunks) > 1
