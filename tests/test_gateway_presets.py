@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 import bot
 
@@ -31,6 +32,46 @@ class FakePresetClient:
         if self.get_error is not None:
             raise self.get_error
         return FakeResponse(payload=self.payload, status_error=self.status_error)
+
+
+EXPECTED_FALLBACK_PRESET_NAMES = {"normal", "coder", "english", "quant"}
+GATEWAY_PRESET_FIELDS = {"description", "prompt_prefix"}
+
+
+@pytest.mark.parametrize(
+    "preset_name",
+    sorted(EXPECTED_FALLBACK_PRESET_NAMES),
+)
+def test_static_fallback_presets_include_expected_gateway_names(preset_name):
+    fallback_presets = bot.get_static_presets()
+
+    assert preset_name in fallback_presets
+
+
+@pytest.mark.parametrize(
+    ("preset_name", "preset_definition"),
+    sorted(bot.get_static_presets().items()),
+)
+def test_static_fallback_presets_match_gateway_field_shape(
+    preset_name, preset_definition
+):
+    assert set(preset_definition) == GATEWAY_PRESET_FIELDS
+    assert preset_definition["description"] == bot.STATIC_PRESET_DEFINITIONS[preset_name][
+        "description"
+    ]
+    assert preset_definition["prompt_prefix"] == bot.STATIC_PRESET_DEFINITIONS[preset_name][
+        "prompt_prefix"
+    ]
+
+
+def test_default_preset_is_present_in_static_fallback_presets():
+    fallback_presets = bot.get_static_presets()
+
+    assert bot.DEFAULT_PRESET in fallback_presets
+    assert fallback_presets[bot.DEFAULT_PRESET] == {
+        "description": bot.STATIC_PRESET_DEFINITIONS[bot.DEFAULT_PRESET]["description"],
+        "prompt_prefix": bot.STATIC_PRESET_DEFINITIONS[bot.DEFAULT_PRESET]["prompt_prefix"],
+    }
 
 
 def test_load_gateway_presets_uses_gateway_data_when_available():
