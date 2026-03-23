@@ -499,10 +499,10 @@ def test_preset_constants_are_defined_centrally():
     assert set(bot.STATIC_PRESET_DEFINITIONS.keys()) == {"normal", "coder", "english", "quant"}
 
 
-def test_preset_prefix_string_values_match_gateway_contract():
-    assert bot.STATIC_PRESET_DEFINITIONS["coder"]["prompt_prefix"] == "Preset: coder.\n\n"
-    assert bot.STATIC_PRESET_DEFINITIONS["english"]["prompt_prefix"] == "Preset: english.\n\n"
-    assert bot.STATIC_PRESET_DEFINITIONS["quant"]["prompt_prefix"] == "Preset: quant.\n\n"
+def test_preset_prefix_string_values_keep_explicit_fallback_instructions():
+    assert bot.STATIC_PRESET_DEFINITIONS["coder"]["prompt_prefix"] == "Preset: coder. Focus on practical coding help.\n\n"
+    assert bot.STATIC_PRESET_DEFINITIONS["english"]["prompt_prefix"] == "Preset: english. Reply in English unless asked otherwise.\n\n"
+    assert bot.STATIC_PRESET_DEFINITIONS["quant"]["prompt_prefix"] == "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n"
 
 
 def test_build_prompt_with_preset_starts_with_coder_prefix():
