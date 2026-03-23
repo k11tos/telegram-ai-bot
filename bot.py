@@ -1,25 +1,23 @@
-import asyncio
 import ast
+import asyncio
 import json
 import logging
 import os
 import re
-import shlex
 import time
 import uuid
 
 import httpx
-from state_store import (
-    build_state_payload as build_persisted_state_payload,
-    load_bot_state as load_bot_state_from_file,
-    save_bot_state as persist_bot_state,
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
 )
-from gateway_client import (
-    AI_GATEWAY_AGENT_BRAIN_PATH,
-    GatewayClientError,
-    extract_model_names,
-    post_agent_brain,
-)
+
 from commands.ops import (
     brain_command,
     health_command,
@@ -30,9 +28,28 @@ from commands.ops import (
     status_command,
     version_command,
 )
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from commands.sessions import (
+    session_clear_command,
+    session_command,
+    session_delete_command,
+    session_rename_command,
+    sessions_command,
+)
+from gateway_client import (
+    AI_GATEWAY_AGENT_BRAIN_PATH,
+    GatewayClientError,
+    extract_model_names,
+    post_agent_brain,
+)
+from session_state import (
+    ensure_user_sessions,
+    get_active_session_name,
+    get_session_history,
+    normalize_session_name,
+)
+from state_store import build_state_payload as build_persisted_state_payload
+from state_store import load_bot_state as load_bot_state_from_file
+from state_store import save_bot_state as persist_bot_state
 
 load_dotenv()
 
@@ -60,7 +77,11 @@ def resolve_http_timeout_config() -> dict[str, float]:
         "connect": float(
             os.getenv(
                 "HTTP_CONNECT_TIMEOUT",
-                legacy_timeout if legacy_timeout is not None else DEFAULT_CONNECT_TIMEOUT,
+                (
+                    legacy_timeout
+                    if legacy_timeout is not None
+                    else DEFAULT_CONNECT_TIMEOUT
+                ),
             )
         ),
         "read": float(
@@ -110,7 +131,10 @@ STATE_FILE_PATH = os.path.join(LOCAL_DATA_DIR, STATE_FILE_NAME)
 
 DEFAULT_PRESET = "normal"
 STATIC_PRESET_DEFINITIONS = {
-    "normal": {"description": "Balanced assistant for general use.", "prompt_prefix": ""},
+    "normal": {
+        "description": "Balanced assistant for general use.",
+        "prompt_prefix": "",
+    },
     "coder": {
         "description": "Focused on programming and debugging tasks.",
         "prompt_prefix": "You are a practical coding assistant. Be precise and production-minded.\n\n",
@@ -134,7 +158,16 @@ DEFAULT_SESSION_NAME = "default"
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 STREAM_EDIT_INTERVAL_SEC = 1.0
-SUPPORTED_DOCUMENT_EXTENSIONS = (".txt", ".md", ".log", ".py", ".json", ".yaml", ".yml", ".csv")
+SUPPORTED_DOCUMENT_EXTENSIONS = (
+    ".txt",
+    ".md",
+    ".log",
+    ".py",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+)
 SUPPORTED_DOCUMENT_EXTENSIONS_TEXT = ", ".join(SUPPORTED_DOCUMENT_EXTENSIONS)
 MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
@@ -243,7 +276,9 @@ def normalize_gateway_presets(payload) -> dict[str, dict[str, str]]:
     return normalized
 
 
-def get_presets_from_bot_data(bot_data: dict | None = None) -> dict[str, dict[str, str]]:
+def get_presets_from_bot_data(
+    bot_data: dict | None = None,
+) -> dict[str, dict[str, str]]:
     if isinstance(bot_data, dict):
         presets = bot_data.get(PRESETS_KEY)
         if isinstance(presets, dict) and presets:
@@ -282,54 +317,6 @@ async def load_gateway_presets(app) -> dict[str, bool]:
         return {"loaded_from_gateway": False, "used_fallback": True}
 
 
-def normalize_session_name(raw_name: str) -> str:
-    normalized = raw_name.strip()
-    if not normalized:
-        return DEFAULT_SESSION_NAME
-    return normalized[:32]
-
-
-def get_active_session_name(user_id: int) -> str:
-    session_name = user_active_sessions.get(user_id)
-    if not isinstance(session_name, str):
-        return DEFAULT_SESSION_NAME
-    return normalize_session_name(session_name)
-
-
-def ensure_user_sessions(user_id: int) -> dict[str, list[str]]:
-    raw_per_session = conversations.get(user_id)
-    if isinstance(raw_per_session, dict):
-        per_session = raw_per_session
-    elif isinstance(raw_per_session, list):
-        # Backward-compatibility for already-loaded in-memory legacy shape.
-        per_session = {DEFAULT_SESSION_NAME: [line for line in raw_per_session if isinstance(line, str)]}
-        conversations[user_id] = per_session
-    else:
-        per_session = {}
-        conversations[user_id] = per_session
-
-    for session_name, history in list(per_session.items()):
-        if not isinstance(session_name, str) or not isinstance(history, list):
-            per_session.pop(session_name, None)
-            continue
-
-        normalized_name = normalize_session_name(session_name)
-        cleaned_history = [line for line in history if isinstance(line, str)][-MAX_HISTORY:]
-        if normalized_name != session_name:
-            per_session.pop(session_name, None)
-        per_session[normalized_name] = cleaned_history
-
-    return per_session
-
-
-def get_session_history(user_id: int, session_name: str | None = None) -> list[str]:
-    active_session = normalize_session_name(session_name or get_active_session_name(user_id))
-    per_session = ensure_user_sessions(user_id)
-    return per_session.setdefault(active_session, [])
-
-
-
-
 def get_session_reset_token(user_id: int, session_name: str) -> int:
     per_session_tokens = user_reset_tokens.get(user_id)
     if not isinstance(per_session_tokens, dict):
@@ -350,6 +337,7 @@ def increment_session_reset_token(user_id: int, session_name: str) -> int:
     next_token = current_token + 1
     user_reset_tokens[user_id][normalize_session_name(session_name)] = next_token
     return next_token
+
 
 def sanitize_version_value(value: str, max_length: int = 64) -> str:
     normalized = value.strip()
@@ -556,7 +544,9 @@ def get_user_selected_model(user_id: int) -> str | None:
     return normalized_model or None
 
 
-def get_user_selected_preset(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str | None:
+def get_user_selected_preset(
+    user_id: int, presets: dict[str, dict[str, str]] | None = None
+) -> str | None:
     selected_preset = user_selected_presets.get(user_id)
     if not isinstance(selected_preset, str):
         return None
@@ -569,7 +559,9 @@ def get_user_selected_preset(user_id: int, presets: dict[str, dict[str, str]] | 
     return normalized_preset
 
 
-def resolve_active_preset(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str:
+def resolve_active_preset(
+    user_id: int, presets: dict[str, dict[str, str]] | None = None
+) -> str:
     available_presets = presets if presets is not None else get_static_presets()
     if DEFAULT_PRESET not in available_presets and available_presets:
         return next(iter(available_presets.keys()))
@@ -591,7 +583,9 @@ def build_prompt_with_preset(
     return f"{preset_prefix}{prompt}"
 
 
-def build_gateway_payload(prompt: str, selected_model: str | None = None) -> dict[str, str]:
+def build_gateway_payload(
+    prompt: str, selected_model: str | None = None
+) -> dict[str, str]:
     payload = {"prompt": prompt}
     if selected_model:
         payload["model"] = selected_model
@@ -638,189 +632,6 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("대화 기록을 초기화했습니다.")
 
 
-async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    requested_session = " ".join(context.args).strip() if context.args else ""
-
-    if not requested_session:
-        active_session = get_active_session_name(user_id)
-        per_session = ensure_user_sessions(user_id)
-        per_session.setdefault(active_session, get_session_history(user_id, active_session))
-        session_names = sorted(per_session.keys())
-        available_sessions_lines = "\n".join(f"- {name}" for name in session_names)
-        if not available_sessions_lines:
-            available_sessions_lines = "- (none)"
-
-        await update.message.reply_text(
-            "\n".join(
-                [
-                    f"현재 세션: {active_session}",
-                    f"전체 세션 수: {len(session_names)}",
-                    "",
-                    "보유한 세션:",
-                    available_sessions_lines,
-                ]
-            )
-        )
-        return
-
-    next_session = normalize_session_name(requested_session)
-    lock = get_user_lock(user_id)
-    async with lock:
-        user_active_sessions[user_id] = next_session
-        get_session_history(user_id, next_session)
-        save_bot_state()
-    await update.message.reply_text(f"세션 변경: {next_session}")
-
-
-async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    active_session = get_active_session_name(user_id)
-    session_names = sorted(ensure_user_sessions(user_id).keys())
-
-    available_sessions_lines = "\n".join(f"- {name}" for name in session_names)
-    if not available_sessions_lines:
-        available_sessions_lines = "- (none)"
-
-    await update.message.reply_text(
-        "\n".join(
-            [
-                f"현재 세션: {active_session}",
-                "",
-                "보유한 세션 목록:",
-                available_sessions_lines,
-            ]
-        )
-    )
-
-
-async def session_rename_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    raw_text = update.message.text if update.message and isinstance(update.message.text, str) else ""
-    args_text = raw_text.partition(" ")[2].strip()
-
-    parsed_args: list[str] = []
-    if args_text:
-        try:
-            parsed_args = shlex.split(args_text)
-        except ValueError:
-            parsed_args = []
-
-    if len(parsed_args) >= 2:
-        old_name, new_name = parsed_args[0], parsed_args[1]
-    elif len(context.args) >= 2:
-        old_name, new_name = context.args[0], context.args[1]
-    else:
-        await update.message.reply_text("기존 세션 이름과 새 세션 이름을 모두 입력해주세요.")
-        return
-
-    old_session = normalize_session_name(old_name)
-    new_session = normalize_session_name(new_name)
-
-    if old_session == new_session:
-        await update.message.reply_text("변경 전/후 세션 이름이 같아요. 다른 이름을 입력해주세요.")
-        return
-
-    if old_session == DEFAULT_SESSION_NAME:
-        await update.message.reply_text("기본 세션 이름은 변경할 수 없어요.")
-        return
-
-    if new_session == DEFAULT_SESSION_NAME:
-        await update.message.reply_text("기본 세션 이름으로는 변경할 수 없어요.")
-        return
-
-    renamed = False
-    duplicate_name = False
-    active_session = get_active_session_name(user_id)
-    lock = get_user_lock(user_id)
-    async with lock:
-        per_session = ensure_user_sessions(user_id)
-        if old_session not in per_session:
-            pass
-        elif new_session in per_session:
-            duplicate_name = True
-        else:
-            per_session[new_session] = per_session.pop(old_session)
-            if active_session == old_session:
-                user_active_sessions[user_id] = new_session
-            save_bot_state()
-            renamed = True
-
-    if duplicate_name:
-        await update.message.reply_text(f"이미 존재하는 세션 이름이에요: {new_session}")
-        return
-
-    if not renamed:
-        await update.message.reply_text(f"세션을 찾을 수 없어요: {old_session}")
-        return
-
-    await update.message.reply_text(f"세션 이름이 변경되었습니다: {old_session} → {new_session}")
-
-
-async def session_delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    requested_session = " ".join(context.args).strip() if context.args else ""
-
-    if not requested_session:
-        await update.message.reply_text("삭제할 세션 이름을 입력해주세요.")
-        return
-
-    target_session = normalize_session_name(requested_session)
-    active_session = get_active_session_name(user_id)
-
-    if target_session == active_session:
-        await update.message.reply_text("현재 사용 중인 세션은 삭제할 수 없어요.")
-        return
-
-    if target_session == DEFAULT_SESSION_NAME:
-        await update.message.reply_text("기본 세션은 삭제할 수 없어요.")
-        return
-
-    deleted = False
-    lock = get_user_lock(user_id)
-    async with lock:
-        per_session = ensure_user_sessions(user_id)
-        if target_session in per_session:
-            per_session.pop(target_session, None)
-            save_bot_state()
-            deleted = True
-
-    if not deleted:
-        await update.message.reply_text(f"세션을 찾을 수 없어요: {target_session}")
-        return
-
-    await update.message.reply_text(f"세션이 삭제되었습니다: {target_session}")
-
-
-async def session_clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    requested_session = " ".join(context.args).strip() if context.args else ""
-
-    if not requested_session:
-        await update.message.reply_text("비울 세션 이름을 입력해주세요.")
-        return
-
-    target_session = normalize_session_name(requested_session)
-
-    cleared = False
-    lock = get_user_lock(user_id)
-    async with lock:
-        per_session = ensure_user_sessions(user_id)
-        if target_session in per_session:
-            per_session[target_session] = []
-            if target_session == get_active_session_name(user_id):
-                increment_session_reset_token(user_id, target_session)
-            save_bot_state()
-            cleared = True
-
-    if not cleared:
-        await update.message.reply_text(f"세션을 찾을 수 없어요: {target_session}")
-        return
-
-    await update.message.reply_text(f"세션 기록을 비웠습니다: {target_session}")
-
-
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -841,7 +652,9 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with lock:
             user_selected_models.pop(user_id, None)
             save_bot_state()
-        await update.message.reply_text("모델 설정을 초기화했습니다. 기본 모델을 사용합니다.")
+        await update.message.reply_text(
+            "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+        )
         return
 
     client = context.application.bot_data.get(HTTP_CLIENT_KEY)
@@ -869,7 +682,9 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"model_validate_failed request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
         )
-        await update.message.reply_text("모델 확인에 실패했어요. 잠시 후 다시 시도해주세요.")
+        await update.message.reply_text(
+            "모델 확인에 실패했어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     if requested_model not in available_models:
@@ -919,7 +734,6 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"현재 프리셋: {active_preset}")
 
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -927,7 +741,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     request_id = uuid.uuid4().hex[:12]
     request_start_ts = time.monotonic()
 
-    logger.info(f"request_start request_id={request_id} user_id={user_id} chat_id={chat_id}")
+    logger.info(
+        f"request_start request_id={request_id} user_id={user_id} chat_id={chat_id}"
+    )
 
     presets = get_presets_from_bot_data(context.application.bot_data)
     lock = get_user_lock(user_id)
@@ -950,7 +766,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"request_rejected_inflight request_id={request_id} "
                 f"user_id={user_id} chat_id={chat_id}"
             )
-            await update.message.reply_text("이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요.")
+            await update.message.reply_text(
+                "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."
+            )
             return
 
         user_in_flight_requests[user_id] = True
@@ -1006,7 +824,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             try:
                 async with client.stream(
-                    "POST", AI_GATEWAY_STREAM_PATH, json=payload, headers=gateway_headers
+                    "POST",
+                    AI_GATEWAY_STREAM_PATH,
+                    json=payload,
+                    headers=gateway_headers,
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
@@ -1027,14 +848,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
                             continue
 
-                        draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
+                        draft_text = fit_telegram_text(
+                            f"초안 작성 중…\n\n{stream_result}"
+                        )
                         if draft_text != last_rendered_text:
                             try:
                                 await waiting_msg.edit_text(draft_text)
                                 last_rendered_text = draft_text
                                 last_edit_ts = now
                             except Exception as stream_edit_error:
-                                latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+                                latency_ms = int(
+                                    (time.monotonic() - request_start_ts) * 1000
+                                )
                                 logger.warning(
                                     f"telegram_stream_edit_failed request_id={request_id} "
                                     f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
@@ -1051,7 +876,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             result = stream_result.strip()
-            should_fallback = stream_failed or not result or not stream_completed_normally
+            should_fallback = (
+                stream_failed or not result or not stream_completed_normally
+            )
             if should_fallback:
                 if result and not stream_completed_normally:
                     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -1080,7 +907,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"gateway_connect_timeout request_id={request_id} user_id={user_id} "
                 f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
             )
-            await waiting_msg.edit_text("AI 서버 연결이 지연되고 있어요. 잠시 후 다시 시도해주세요.")
+            await waiting_msg.edit_text(
+                "AI 서버 연결이 지연되고 있어요. 잠시 후 다시 시도해주세요."
+            )
             return
         except httpx.ReadTimeout as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -1088,7 +917,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"gateway_read_timeout request_id={request_id} user_id={user_id} "
                 f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
             )
-            await waiting_msg.edit_text("응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.")
+            await waiting_msg.edit_text(
+                "응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요."
+            )
             return
         except httpx.WriteTimeout as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -1096,7 +927,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"gateway_write_timeout request_id={request_id} user_id={user_id} "
                 f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
             )
-            await waiting_msg.edit_text("요청 전송이 지연되고 있어요. 잠시 후 다시 시도해주세요.")
+            await waiting_msg.edit_text(
+                "요청 전송이 지연되고 있어요. 잠시 후 다시 시도해주세요."
+            )
             return
         except httpx.PoolTimeout as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -1104,7 +937,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"gateway_pool_timeout request_id={request_id} user_id={user_id} "
                 f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
             )
-            await waiting_msg.edit_text("요청이 몰리고 있어요. 잠시 후 다시 시도해주세요.")
+            await waiting_msg.edit_text(
+                "요청이 몰리고 있어요. 잠시 후 다시 시도해주세요."
+            )
             return
         except httpx.ConnectError as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -1134,7 +969,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"gateway_response_parse_error request_id={request_id} user_id={user_id} "
                 f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
             )
-            await waiting_msg.edit_text("죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.")
+            await waiting_msg.edit_text(
+                "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."
+            )
             return
         except Exception as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -1214,8 +1051,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 current_history = get_session_history(user_id, active_session)
-                updated_history = current_history + [f"User: {user_text}", f"AI: {result}"]
-                ensure_user_sessions(user_id)[active_session] = updated_history[-MAX_HISTORY:]
+                updated_history = current_history + [
+                    f"User: {user_text}",
+                    f"AI: {result}",
+                ]
+                ensure_user_sessions(user_id)[active_session] = updated_history[
+                    -MAX_HISTORY:
+                ]
                 save_bot_state()
             finally:
                 user_next_turn_to_finalize[user_id] = turn_id + 1
@@ -1248,7 +1090,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_id,
                 chat_id,
             )
-            await update.message.reply_text("이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요.")
+            await update.message.reply_text(
+                "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."
+            )
             return
 
         user_in_flight_requests[user_id] = True
@@ -1333,7 +1177,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 latency_ms,
                 error,
             )
-            await waiting_msg.edit_text("요약 요청 처리 중 서버 오류가 발생했어요. 잠시 후 다시 시도해주세요.")
+            await waiting_msg.edit_text(
+                "요약 요청 처리 중 서버 오류가 발생했어요. 잠시 후 다시 시도해주세요."
+            )
         except (httpx.RequestError, ValueError, KeyError) as error:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.warning(
@@ -1344,7 +1190,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 latency_ms,
                 error,
             )
-            await waiting_msg.edit_text("문서 요약 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.")
+            await waiting_msg.edit_text(
+                "문서 요약 중 오류가 발생했어요. 잠시 후 다시 시도해주세요."
+            )
     finally:
         async with lock:
             user_in_flight_requests[user_id] = False
