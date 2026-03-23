@@ -500,18 +500,18 @@ def test_preset_constants_are_defined_centrally():
 
 
 def test_preset_prefix_and_description_values_match_gateway_contract():
-    assert bot.STATIC_PRESET_DEFINITIONS["normal"] == {"description": "기본", "prompt_prefix": ""}
+    assert bot.STATIC_PRESET_DEFINITIONS["normal"] == {"description": "Balanced assistant for general use.", "prompt_prefix": ""}
     assert bot.STATIC_PRESET_DEFINITIONS["coder"] == {
-        "description": "코더",
-        "prompt_prefix": "Preset: coder.\n\n",
+        "description": "Focused on programming and debugging tasks.",
+        "prompt_prefix": "You are a practical coding assistant. Be precise and production-minded.\n\n",
     }
     assert bot.STATIC_PRESET_DEFINITIONS["english"] == {
-        "description": "영어",
-        "prompt_prefix": "Preset: english.\n\n",
+        "description": "Helps improve English writing and grammar.",
+        "prompt_prefix": "You are an English writing helper. Improve clarity, grammar, and tone.\n\n",
     }
     assert bot.STATIC_PRESET_DEFINITIONS["quant"] == {
-        "description": "정량",
-        "prompt_prefix": "Preset: quant.\n\n",
+        "description": "Supports quantitative and analytical reasoning.",
+        "prompt_prefix": "You are a quantitative reasoning assistant. Show concise, correct math.\n\n",
     }
 
 
