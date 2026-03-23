@@ -10,6 +10,11 @@ import uuid
 
 import httpx
 from brain_formatter import render_brain_payload
+from state_store import (
+    build_state_payload as build_persisted_state_payload,
+    load_bot_state as load_bot_state_from_file,
+    save_bot_state as persist_bot_state,
+)
 from gateway_client import (
     AI_GATEWAY_AGENT_BRAIN_PATH,
     GatewayClientError,
@@ -154,133 +159,44 @@ VERSION_ENV_KEYS = ("APP_VERSION", "VERSION")
 COMMIT_ENV_KEYS = ("GIT_COMMIT_SHA", "COMMIT_SHA", "GITHUB_SHA")
 
 
-def _normalize_int_key_mapping(source: dict) -> dict[int, object]:
-    normalized: dict[int, object] = {}
-    for key, value in source.items():
-        try:
-            normalized[int(key)] = value
-        except (TypeError, ValueError):
-            continue
-    return normalized
-
-
 def build_state_payload() -> dict[str, object]:
-    serialized_conversations: dict[str, dict[str, list[str]]] = {}
-    for user_id, per_session in conversations.items():
-        if not isinstance(per_session, dict):
-            continue
-        session_payload = {
-            session_name: history
-            for session_name, history in per_session.items()
-            if isinstance(session_name, str) and isinstance(history, list)
-        }
-        if session_payload:
-            serialized_conversations[str(user_id)] = session_payload
-
-    return {
-        "version": 1,
-        "conversations": serialized_conversations,
-        "active_sessions": {
-            str(user_id): session_name for user_id, session_name in user_active_sessions.items()
-        },
-        "selected_models": {
-            str(user_id): model for user_id, model in user_selected_models.items()
-        },
-        "selected_presets": {
-            str(user_id): preset for user_id, preset in user_selected_presets.items()
-        },
-    }
+    return build_persisted_state_payload(
+        conversations,
+        user_active_sessions,
+        user_selected_models,
+        user_selected_presets,
+    )
 
 
 def save_bot_state() -> None:
-    try:
-        os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
-        payload = build_state_payload()
-        temp_path = f"{STATE_FILE_PATH}.tmp"
-        with open(temp_path, "w", encoding="utf-8") as state_file:
-            json.dump(payload, state_file, ensure_ascii=False, separators=(",", ":"))
-        os.replace(temp_path, STATE_FILE_PATH)
-    except OSError as error:
-        logger.warning("state_save_failed path=%s error=%s", STATE_FILE_PATH, error)
+    persist_bot_state(
+        STATE_FILE_PATH,
+        LOCAL_DATA_DIR,
+        conversations,
+        user_active_sessions,
+        user_selected_models,
+        user_selected_presets,
+        logger,
+    )
 
 
 def load_bot_state() -> None:
-    loaded_conversations: dict[int, dict[str, list[str]]] = {}
-    loaded_active_sessions: dict[int, str] = {}
-    loaded_models: dict[int, str] = {}
-    loaded_presets: dict[int, str] = {}
-
-    if not os.path.exists(STATE_FILE_PATH):
-        logger.info("state_file_missing path=%s", STATE_FILE_PATH)
-    else:
-        try:
-            with open(STATE_FILE_PATH, "r", encoding="utf-8") as state_file:
-                payload = json.load(state_file)
-        except (OSError, json.JSONDecodeError) as error:
-            logger.warning("state_load_failed path=%s error=%s", STATE_FILE_PATH, error)
-        else:
-            if not isinstance(payload, dict):
-                logger.warning("state_load_invalid_root path=%s", STATE_FILE_PATH)
-            else:
-                raw_conversations = payload.get("conversations", {})
-                if isinstance(raw_conversations, dict):
-                    normalized_conversations = _normalize_int_key_mapping(raw_conversations)
-                    for user_id, raw_history in normalized_conversations.items():
-                        per_session_histories: dict[str, list[str]] = {}
-                        if isinstance(raw_history, list):
-                            # Backward-compatible shape: user -> history list
-                            cleaned_history = [line for line in raw_history if isinstance(line, str)]
-                            per_session_histories[DEFAULT_SESSION_NAME] = cleaned_history[-MAX_HISTORY:]
-                        elif isinstance(raw_history, dict):
-                            for raw_session_name, session_history in raw_history.items():
-                                if not isinstance(raw_session_name, str) or not isinstance(
-                                    session_history, list
-                                ):
-                                    continue
-                                normalized_session_name = normalize_session_name(raw_session_name)
-                                cleaned_history = [
-                                    line for line in session_history if isinstance(line, str)
-                                ]
-                                per_session_histories[normalized_session_name] = cleaned_history[
-                                    -MAX_HISTORY:
-                                ]
-
-                        if per_session_histories:
-                            loaded_conversations[user_id] = per_session_histories
-
-                raw_active_sessions = payload.get("active_sessions", {})
-                if isinstance(raw_active_sessions, dict):
-                    normalized_active_sessions = _normalize_int_key_mapping(raw_active_sessions)
-                    for user_id, raw_session_name in normalized_active_sessions.items():
-                        if not isinstance(raw_session_name, str):
-                            continue
-                        loaded_active_sessions[user_id] = normalize_session_name(raw_session_name)
-
-                raw_models = payload.get("selected_models", {})
-                if isinstance(raw_models, dict):
-                    normalized_models = _normalize_int_key_mapping(raw_models)
-                    for user_id, model in normalized_models.items():
-                        if isinstance(model, str) and model.strip():
-                            loaded_models[user_id] = model.strip()
-
-                raw_presets = payload.get("selected_presets", {})
-                if isinstance(raw_presets, dict):
-                    normalized_presets = _normalize_int_key_mapping(raw_presets)
-                    for user_id, preset in normalized_presets.items():
-                        if not isinstance(preset, str):
-                            continue
-                        normalized_preset = preset.strip().lower()
-                        if normalized_preset:
-                            loaded_presets[user_id] = normalized_preset
+    loaded_state = load_bot_state_from_file(
+        STATE_FILE_PATH,
+        normalize_session_name,
+        DEFAULT_SESSION_NAME,
+        MAX_HISTORY,
+        logger,
+    )
 
     conversations.clear()
-    conversations.update(loaded_conversations)
+    conversations.update(loaded_state["conversations"])
     user_active_sessions.clear()
-    user_active_sessions.update(loaded_active_sessions)
+    user_active_sessions.update(loaded_state["active_sessions"])
     user_selected_models.clear()
-    user_selected_models.update(loaded_models)
+    user_selected_models.update(loaded_state["selected_models"])
     user_selected_presets.clear()
-    user_selected_presets.update(loaded_presets)
+    user_selected_presets.update(loaded_state["selected_presets"])
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
