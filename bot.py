@@ -97,18 +97,18 @@ STATE_FILE_PATH = os.path.join(LOCAL_DATA_DIR, STATE_FILE_NAME)
 
 DEFAULT_PRESET = "normal"
 STATIC_PRESET_DEFINITIONS = {
-    "normal": {"description": "기본 응답 스타일", "prompt_prefix": ""},
+    "normal": {"description": "Balanced assistant for general use.", "prompt_prefix": ""},
     "coder": {
-        "description": "실용적인 코딩 중심 답변",
-        "prompt_prefix": "Preset: coder. Focus on practical coding help.\n\n",
+        "description": "Focused on programming and debugging tasks.",
+        "prompt_prefix": "You are a practical coding assistant. Be precise and production-minded.\n\n",
     },
     "english": {
-        "description": "영어 우선 답변",
-        "prompt_prefix": "Preset: english. Reply in English unless asked otherwise.\n\n",
+        "description": "Helps improve English writing and grammar.",
+        "prompt_prefix": "You are an English writing helper. Improve clarity, grammar, and tone.\n\n",
     },
     "quant": {
-        "description": "정량적 추론 중심 답변",
-        "prompt_prefix": "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n",
+        "description": "Supports quantitative and analytical reasoning.",
+        "prompt_prefix": "You are a quantitative reasoning assistant. Show concise, correct math.\n\n",
     },
 }
 PRESETS_KEY = "presets"
