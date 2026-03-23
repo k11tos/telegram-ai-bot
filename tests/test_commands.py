@@ -534,10 +534,10 @@ def test_reload_presets_command_updates_presets_from_gateway(make_update_context
     client = FakeModelsClient(
         payload={
             "presets": [
-                {"name": "normal", "description": "기본", "prompt_prefix": ""},
-                {"name": "coder", "description": "코더", "prompt_prefix": "Preset: coder.\n\n"},
-                {"name": "english", "description": "영어", "prompt_prefix": "Preset: english.\n\n"},
-                {"name": "quant", "description": "정량", "prompt_prefix": "Preset: quant.\n\n"},
+                {"name": "normal", "description": "기본 응답 스타일", "prompt_prefix": ""},
+                {"name": "coder", "description": "실용적인 코딩 중심 답변", "prompt_prefix": "Preset: coder. Focus on practical coding help.\n\n"},
+                {"name": "english", "description": "영어 우선 답변", "prompt_prefix": "Preset: english. Reply in English unless asked otherwise.\n\n"},
+                {"name": "quant", "description": "정량적 추론 중심 답변", "prompt_prefix": "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n"},
             ]
         }
     )

@@ -500,18 +500,18 @@ def test_preset_constants_are_defined_centrally():
 
 
 def test_preset_prefix_and_description_values_match_gateway_contract():
-    assert bot.STATIC_PRESET_DEFINITIONS["normal"] == {"description": "기본", "prompt_prefix": ""}
+    assert bot.STATIC_PRESET_DEFINITIONS["normal"] == {"description": "기본 응답 스타일", "prompt_prefix": ""}
     assert bot.STATIC_PRESET_DEFINITIONS["coder"] == {
-        "description": "코더",
-        "prompt_prefix": "Preset: coder.\n\n",
+        "description": "실용적인 코딩 중심 답변",
+        "prompt_prefix": "Preset: coder. Focus on practical coding help.\n\n",
     }
     assert bot.STATIC_PRESET_DEFINITIONS["english"] == {
-        "description": "영어",
-        "prompt_prefix": "Preset: english.\n\n",
+        "description": "영어 우선 답변",
+        "prompt_prefix": "Preset: english. Reply in English unless asked otherwise.\n\n",
     }
     assert bot.STATIC_PRESET_DEFINITIONS["quant"] == {
-        "description": "정량",
-        "prompt_prefix": "Preset: quant.\n\n",
+        "description": "정량적 추론 중심 답변",
+        "prompt_prefix": "Preset: quant. Prefer quantitative reasoning and clear assumptions.\n\n",
     }
 
 
