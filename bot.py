@@ -1026,6 +1026,31 @@ async def _finalize_message_turn(
             finalize_condition.notify_all()
 
 
+async def _create_waiting_message(
+    update: Update,
+    user_id: int,
+    chat_id: int | None,
+    request_id: str,
+    request_start_ts: float,
+    turn_id: int,
+):
+    try:
+        return await update.message.reply_text("생각 중…")
+    except Exception as waiting_msg_error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.error(
+            f"telegram_waiting_message_failed request_id={request_id} "
+            f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
+            f"error={waiting_msg_error}"
+        )
+        finalize_condition = get_user_finalize_condition(user_id)
+        async with finalize_condition:
+            if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                user_next_turn_to_finalize[user_id] = turn_id + 1
+                finalize_condition.notify_all()
+        return None
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -1060,20 +1085,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = request_state["payload"]
 
     try:
-        try:
-            waiting_msg = await update.message.reply_text("생각 중…")
-        except Exception as waiting_msg_error:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"telegram_waiting_message_failed request_id={request_id} "
-                f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
-                f"error={waiting_msg_error}"
-            )
-            finalize_condition = get_user_finalize_condition(user_id)
-            async with finalize_condition:
-                if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                    user_next_turn_to_finalize[user_id] = turn_id + 1
-                    finalize_condition.notify_all()
+        waiting_msg = await _create_waiting_message(
+            update=update,
+            user_id=user_id,
+            chat_id=chat_id,
+            request_id=request_id,
+            request_start_ts=request_start_ts,
+            turn_id=turn_id,
+        )
+        if waiting_msg is None:
             return
 
         client = context.application.bot_data.get(HTTP_CLIENT_KEY)
