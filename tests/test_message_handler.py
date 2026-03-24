@@ -199,6 +199,75 @@ def test_stream_failure_falls_back_to_chat_and_appends_reply(make_update_context
     assert update.message.waiting_message.edits[-1] == "폴백 응답"
 
 
+def test_inflight_request_is_rejected_while_first_request_is_running(make_update_context):
+    async def scenario():
+        user_id = 451
+        gate = asyncio.Event()
+        first_client = DelayedClient(
+            gate=gate,
+            stream_lines=[f"data: {json.dumps({'response': '첫 응답'})}", "data: [DONE]"],
+        )
+        first_update, first_context = make_update_context(
+            user_id=user_id,
+            text="첫 요청",
+            client=first_client,
+        )
+
+        first_task = asyncio.create_task(bot.handle_message(first_update, first_context))
+
+        while not first_client.stream_calls:
+            await asyncio.sleep(0)
+
+        second_update, second_context = make_update_context(
+            user_id=user_id,
+            text="두번째 요청",
+            client=FakeClient(stream_lines=[f"data: {json.dumps({'response': '둘 응답'})}", "data: [DONE]"]),
+        )
+        await bot.handle_message(second_update, second_context)
+
+        assert second_update.message.replies == ["이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."]
+
+        gate.set()
+        await first_task
+
+        assert bot.get_session_history(user_id) == ["User: 첫 요청", "AI: 첫 응답"]
+        assert bot.user_in_flight_requests[user_id] is False
+
+    asyncio.run(scenario())
+
+
+def test_stream_success_path_does_not_call_fallback_chat(make_update_context):
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '스트리밍 성공'})}",
+            "data: [DONE]",
+        ]
+    )
+    update, context = make_update_context(text="성공 경로", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert len(client.stream_calls) == 1
+    assert client.post_calls == []
+    assert update.message.waiting_message.edits[-1] == "스트리밍 성공"
+    assert bot.get_session_history(123) == ["User: 성공 경로", "AI: 스트리밍 성공"]
+
+
+def test_incomplete_stream_falls_back_to_non_stream_chat(make_update_context):
+    client = FakeClient(
+        stream_lines=[f"data: {json.dumps({'response': '부분 응답'})}"],
+        post_payload={"response": "최종 폴백 응답"},
+    )
+    update, context = make_update_context(text="폴백 필요", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert len(client.stream_calls) == 1
+    assert len(client.post_calls) == 1
+    assert update.message.waiting_message.edits[-1] == "최종 폴백 응답"
+    assert bot.get_session_history(123) == ["User: 폴백 필요", "AI: 최종 폴백 응답"]
+
+
 def test_backend_request_error_is_handled_gracefully(make_update_context):
     request = httpx.Request("POST", "http://test/chat")
     stream_error = httpx.RequestError("stream failed", request=request)
@@ -425,6 +494,98 @@ def test_reset_in_same_session_blocks_inflight_save(make_update_context):
         gate.set()
         await task
 
+        assert bot.get_session_history(user_id, "default") == []
+
+    asyncio.run(scenario())
+
+
+def test_telegram_delivery_fallback_replies_when_waiting_edit_fails(make_update_context):
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '전달 폴백 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+    update, context = make_update_context(text="텔레그램 전달", client=client)
+    update.message.waiting_message.fail_on_edit = True
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert update.message.replies[0] == "생각 중…"
+    assert "전달 폴백 응답" in update.message.replies[1:]
+    assert bot.get_session_history(123) == ["User: 텔레그램 전달", "AI: 전달 폴백 응답"]
+
+
+def test_finalization_waits_for_turn_order_before_appending_history(make_update_context):
+    async def scenario():
+        user_id = 777
+        bot.user_next_turn_to_finalize[user_id] = 1
+
+        turn2_task = asyncio.create_task(
+            bot._finalize_message_turn(
+                user_id=user_id,
+                turn_id=2,
+                response_delivered=True,
+                active_session=bot.DEFAULT_SESSION_NAME,
+                reset_token=bot.get_session_reset_token(user_id, bot.DEFAULT_SESSION_NAME),
+                user_text="두번째 질문",
+                result="두번째 답변",
+                request_id="turn2",
+                chat_id=1,
+                request_start_ts=0.0,
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert bot.get_session_history(user_id) == []
+        assert bot.user_next_turn_to_finalize[user_id] == 1
+
+        await bot._finalize_message_turn(
+            user_id=user_id,
+            turn_id=1,
+            response_delivered=True,
+            active_session=bot.DEFAULT_SESSION_NAME,
+            reset_token=bot.get_session_reset_token(user_id, bot.DEFAULT_SESSION_NAME),
+            user_text="첫번째 질문",
+            result="첫번째 답변",
+            request_id="turn1",
+            chat_id=1,
+            request_start_ts=0.0,
+        )
+        await turn2_task
+
+        assert bot.get_session_history(user_id) == [
+            "User: 첫번째 질문",
+            "AI: 첫번째 답변",
+            "User: 두번째 질문",
+            "AI: 두번째 답변",
+        ]
+        assert bot.user_next_turn_to_finalize[user_id] == 3
+
+    asyncio.run(scenario())
+
+
+def test_reset_token_skip_keeps_response_visible_but_skips_history_write(make_update_context):
+    async def scenario():
+        user_id = 778
+        gate = asyncio.Event()
+        client = DelayedClient(
+            gate=gate,
+            stream_lines=[f"data: {json.dumps({'response': '리셋 이후 응답'})}", "data: [DONE]"],
+        )
+        update, context = make_update_context(user_id=user_id, text="리셋 경쟁", client=client)
+
+        task = asyncio.create_task(bot.handle_message(update, context))
+        while not client.stream_calls:
+            await asyncio.sleep(0)
+
+        reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+        await bot.reset(reset_update, reset_context)
+
+        gate.set()
+        await task
+
+        assert update.message.waiting_message.edits[-1] == "리셋 이후 응답"
         assert bot.get_session_history(user_id, "default") == []
 
     asyncio.run(scenario())
