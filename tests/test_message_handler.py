@@ -199,6 +199,55 @@ def test_stream_failure_falls_back_to_chat_and_appends_reply(make_update_context
     assert update.message.waiting_message.edits[-1] == "폴백 응답"
 
 
+def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(make_update_context):
+    async def scenario():
+        user_id = 452
+        first_client = FakeClient(
+            stream_lines=[f"data: {json.dumps({'response': '첫 응답'})}", "data: [DONE]"],
+        )
+        failed_update, failed_context = make_update_context(
+            user_id=user_id,
+            text="대기 메시지 실패",
+            client=first_client,
+        )
+
+        original_reply_text = failed_update.message.reply_text
+        call_count = 0
+
+        async def fail_first_reply(text):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1 and text == "생각 중…":
+                raise RuntimeError("waiting send failed")
+            return await original_reply_text(text)
+
+        failed_update.message.reply_text = fail_first_reply
+
+        await bot.handle_message(failed_update, failed_context)
+
+        assert bot.user_in_flight_requests[user_id] is False
+        assert bot.get_session_history(user_id) == []
+        assert bot.user_next_turn_to_finalize[user_id] == 2
+
+        next_client = FakeClient(
+            stream_lines=[f"data: {json.dumps({'response': '복구 응답'})}", "data: [DONE]"],
+        )
+        next_update, next_context = make_update_context(
+            user_id=user_id,
+            text="정상 요청",
+            client=next_client,
+        )
+        await bot.handle_message(next_update, next_context)
+
+        assert next_update.message.replies[0] == "생각 중…"
+        assert next_update.message.waiting_message.edits[-1] == "복구 응답"
+        assert bot.get_session_history(user_id) == ["User: 정상 요청", "AI: 복구 응답"]
+        assert bot.user_in_flight_requests[user_id] is False
+        assert bot.user_next_turn_to_finalize[user_id] == 3
+
+    asyncio.run(scenario())
+
+
 def test_inflight_request_is_rejected_while_first_request_is_running(make_update_context):
     async def scenario():
         user_id = 451
