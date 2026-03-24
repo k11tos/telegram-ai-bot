@@ -778,23 +778,15 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"현재 프리셋: {active_preset}")
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id if update.effective_chat else None
-    user_text = update.message.text
-    request_id = uuid.uuid4().hex[:12]
-    request_start_ts = time.monotonic()
-
-    logger.info(
-        f"request_start request_id={request_id} user_id={user_id} chat_id={chat_id}"
-    )
-
-    presets = get_presets_from_bot_data(context.application.bot_data)
-    lock = get_user_lock(user_id)
-
-    # Keep the per-user lock scope minimal: only protect shared state reads/writes
-    # needed to prepare this turn. The potentially slow AI call runs without holding
-    # the lock so later messages from the same user can start in parallel.
+async def _prepare_message_request_state(
+    user_id: int,
+    user_text: str,
+    presets: dict[str, dict[str, str]],
+    lock: asyncio.Lock,
+    request_id: str,
+    chat_id: int | None,
+    update: Update,
+) -> dict[str, object] | None:
     async with lock:
         active_session = get_active_session_name(user_id)
         history = get_session_history(user_id, active_session)
@@ -813,7 +805,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."
             )
-            return
+            return None
 
         user_in_flight_requests[user_id] = True
 
@@ -825,6 +817,236 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_history = new_history[-MAX_HISTORY:]
         selected_model = get_user_selected_model(user_id)
         active_preset = resolve_active_preset(user_id, presets)
+
+    prompt = build_prompt_with_preset(new_history, active_preset, presets)
+    payload = build_gateway_payload(prompt, selected_model)
+    return {
+        "active_session": active_session,
+        "reset_token": reset_token,
+        "turn_id": turn_id,
+        "payload": payload,
+    }
+
+
+async def _call_gateway_with_stream_fallback(
+    client: httpx.AsyncClient,
+    payload: dict[str, str],
+    request_id: str,
+    user_id: int,
+    chat_id: int | None,
+    waiting_msg,
+    request_start_ts: float,
+) -> str:
+    gateway_headers = {"X-Request-Id": request_id}
+    stream_result = ""
+    stream_completed_normally = False
+    stream_failed = False
+    last_rendered_text = ""
+    last_edit_ts = 0.0
+
+    try:
+        async with client.stream(
+            "POST",
+            AI_GATEWAY_STREAM_PATH,
+            json=payload,
+            headers=gateway_headers,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                delta, done = extract_stream_delta(line)
+                if done:
+                    stream_completed_normally = True
+                    break
+
+                if not delta:
+                    continue
+
+                if stream_result and delta.startswith(stream_result):
+                    stream_result = delta
+                else:
+                    stream_result += delta
+                now = time.monotonic()
+
+                if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
+                    continue
+
+                draft_text = fit_telegram_text(f"초안 작성 중…\n\n{stream_result}")
+                if draft_text != last_rendered_text:
+                    try:
+                        await waiting_msg.edit_text(draft_text)
+                        last_rendered_text = draft_text
+                        last_edit_ts = now
+                    except Exception as stream_edit_error:
+                        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+                        logger.warning(
+                            f"telegram_stream_edit_failed request_id={request_id} "
+                            f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
+                            f"error={stream_edit_error}"
+                        )
+    except (httpx.HTTPStatusError, httpx.RequestError) as stream_error:
+        stream_failed = True
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        stream_error_type = type(stream_error).__name__
+        logger.warning(
+            f"streaming_fallback request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms} "
+            f"error_type={stream_error_type} error={stream_error}"
+        )
+
+    result = stream_result.strip()
+    should_fallback = stream_failed or not result or not stream_completed_normally
+    if should_fallback:
+        if result and not stream_completed_normally:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.warning(
+                f"streaming_fallback_partial_discard request_id={request_id} "
+                f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms}"
+            )
+        fallback_resp = await client.post(
+            AI_GATEWAY_CHAT_PATH, json=payload, headers=gateway_headers
+        )
+        fallback_resp.raise_for_status()
+        result = fallback_resp.json()["response"]
+
+    return result
+
+
+async def _deliver_telegram_response(
+    update: Update,
+    waiting_msg,
+    result: str,
+    request_id: str,
+    user_id: int,
+    chat_id: int | None,
+    request_start_ts: float,
+) -> bool:
+    response_delivered = True
+    try:
+        final_chunks = split_telegram_text(result)
+        await waiting_msg.edit_text(final_chunks[0])
+        for chunk in final_chunks[1:]:
+            await update.message.reply_text(chunk)
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.info(
+            f"response_delivered request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms}"
+        )
+    except Exception as edit_error:
+        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+        logger.error(
+            f"telegram_message_edit_failed request_id={request_id} user_id={user_id} "
+            f"chat_id={chat_id} latency_ms={latency_ms} error={edit_error}"
+        )
+        try:
+            final_chunks = split_telegram_text(result)
+            for chunk in final_chunks:
+                await update.message.reply_text(chunk)
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.info(
+                f"response_delivered request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms}"
+            )
+        except Exception as reply_error:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.error(
+                f"telegram_fallback_reply_failed request_id={request_id} user_id={user_id} "
+                f"chat_id={chat_id} latency_ms={latency_ms} error={reply_error}"
+            )
+            error_summary = str(reply_error).strip() or type(reply_error).__name__
+            if len(error_summary) > 120:
+                error_summary = error_summary[:117] + "..."
+            try:
+                await update.message.reply_text(
+                    f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
+                )
+            except Exception as notify_error:
+                latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+                logger.error(
+                    f"telegram_error_notice_send_failed request_id={request_id} "
+                    f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
+                    f"error={notify_error}"
+                )
+            # Never let Telegram send failures skip finalization ordering.
+            response_delivered = False
+
+    return response_delivered
+
+
+async def _finalize_message_turn(
+    user_id: int,
+    turn_id: int,
+    response_delivered: bool,
+    active_session: str,
+    reset_token: int,
+    user_text: str,
+    result: str,
+    request_id: str,
+    chat_id: int | None,
+    request_start_ts: float,
+) -> None:
+    finalize_condition = get_user_finalize_condition(user_id)
+    # Reacquire the shared per-user lock only for finalization ordering and history
+    # mutation. Turn numbers still serialize this section to preserve ordering.
+    async with finalize_condition:
+        while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
+            await finalize_condition.wait()
+
+        try:
+            if not response_delivered:
+                return
+
+            if get_session_reset_token(user_id, active_session) != reset_token:
+                latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+                logger.info(
+                    f"conversation_reset_skip_history_update request_id={request_id} "
+                    f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms}"
+                )
+                return
+
+            current_history = get_session_history(user_id, active_session)
+            updated_history = current_history + [
+                f"User: {user_text}",
+                f"AI: {result}",
+            ]
+            ensure_user_sessions(user_id)[active_session] = updated_history[-MAX_HISTORY:]
+            save_bot_state()
+        finally:
+            user_next_turn_to_finalize[user_id] = turn_id + 1
+            finalize_condition.notify_all()
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    user_text = update.message.text
+    request_id = uuid.uuid4().hex[:12]
+    request_start_ts = time.monotonic()
+
+    logger.info(
+        f"request_start request_id={request_id} user_id={user_id} chat_id={chat_id}"
+    )
+
+    presets = get_presets_from_bot_data(context.application.bot_data)
+    lock = get_user_lock(user_id)
+    # Keep the per-user lock scope minimal: only protect shared state reads/writes
+    # needed to prepare this turn. The potentially slow AI call runs without holding
+    # the lock so later messages from the same user can start in parallel.
+    request_state = await _prepare_message_request_state(
+        user_id=user_id,
+        user_text=user_text,
+        presets=presets,
+        lock=lock,
+        request_id=request_id,
+        chat_id=chat_id,
+        update=update,
+    )
+    if request_state is None:
+        return
+
+    active_session = request_state["active_session"]
+    reset_token = request_state["reset_token"]
+    turn_id = request_state["turn_id"]
+    payload = request_state["payload"]
 
     try:
         try:
@@ -843,9 +1065,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     finalize_condition.notify_all()
             return
 
-        prompt = build_prompt_with_preset(new_history, active_preset, presets)
-        payload = build_gateway_payload(prompt, selected_model)
-        gateway_headers = {"X-Request-Id": request_id}
         client = context.application.bot_data.get(HTTP_CLIENT_KEY)
 
         if client is None:
@@ -859,82 +1078,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        stream_result = ""
-        stream_completed_normally = False
-        stream_failed = False
-        last_rendered_text = ""
-        last_edit_ts = 0.0
-
         try:
-            try:
-                async with client.stream(
-                    "POST",
-                    AI_GATEWAY_STREAM_PATH,
-                    json=payload,
-                    headers=gateway_headers,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        delta, done = extract_stream_delta(line)
-                        if done:
-                            stream_completed_normally = True
-                            break
-
-                        if not delta:
-                            continue
-
-                        if stream_result and delta.startswith(stream_result):
-                            stream_result = delta
-                        else:
-                            stream_result += delta
-                        now = time.monotonic()
-
-                        if now - last_edit_ts < STREAM_EDIT_INTERVAL_SEC:
-                            continue
-
-                        draft_text = fit_telegram_text(
-                            f"초안 작성 중…\n\n{stream_result}"
-                        )
-                        if draft_text != last_rendered_text:
-                            try:
-                                await waiting_msg.edit_text(draft_text)
-                                last_rendered_text = draft_text
-                                last_edit_ts = now
-                            except Exception as stream_edit_error:
-                                latency_ms = int(
-                                    (time.monotonic() - request_start_ts) * 1000
-                                )
-                                logger.warning(
-                                    f"telegram_stream_edit_failed request_id={request_id} "
-                                    f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
-                                    f"error={stream_edit_error}"
-                                )
-            except (httpx.HTTPStatusError, httpx.RequestError) as stream_error:
-                stream_failed = True
-                latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-                stream_error_type = type(stream_error).__name__
-                logger.warning(
-                    f"streaming_fallback request_id={request_id} user_id={user_id} "
-                    f"chat_id={chat_id} latency_ms={latency_ms} "
-                    f"error_type={stream_error_type} error={stream_error}"
-                )
-
-            result = stream_result.strip()
-            should_fallback = (
-                stream_failed or not result or not stream_completed_normally
+            result = await _call_gateway_with_stream_fallback(
+                client=client,
+                payload=payload,
+                request_id=request_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                waiting_msg=waiting_msg,
+                request_start_ts=request_start_ts,
             )
-            if should_fallback:
-                if result and not stream_completed_normally:
-                    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-                    logger.warning(
-                        f"streaming_fallback_partial_discard request_id={request_id} "
-                        f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms}"
-                    )
-                fallback_resp = await client.post(
-                    AI_GATEWAY_CHAT_PATH, json=payload, headers=gateway_headers
-                )
-                fallback_resp.raise_for_status()
-                result = fallback_resp.json()["response"]
         except httpx.HTTPStatusError as e:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.error(
@@ -1026,86 +1179,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
             return
 
-        response_delivered = True
-        try:
-            final_chunks = split_telegram_text(result)
-            await waiting_msg.edit_text(final_chunks[0])
-            for chunk in final_chunks[1:]:
-                await update.message.reply_text(chunk)
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.info(
-                f"response_delivered request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms}"
-            )
-        except Exception as edit_error:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"telegram_message_edit_failed request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={edit_error}"
-            )
-            try:
-                final_chunks = split_telegram_text(result)
-                for chunk in final_chunks:
-                    await update.message.reply_text(chunk)
-                latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-                logger.info(
-                    f"response_delivered request_id={request_id} user_id={user_id} "
-                    f"chat_id={chat_id} latency_ms={latency_ms}"
-                )
-            except Exception as reply_error:
-                latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-                logger.error(
-                    f"telegram_fallback_reply_failed request_id={request_id} user_id={user_id} "
-                    f"chat_id={chat_id} latency_ms={latency_ms} error={reply_error}"
-                )
-                error_summary = str(reply_error).strip() or type(reply_error).__name__
-                if len(error_summary) > 120:
-                    error_summary = error_summary[:117] + "..."
-                try:
-                    await update.message.reply_text(
-                        f"AI 응답 전송 중 오류가 발생했습니다. ({error_summary})"
-                    )
-                except Exception as notify_error:
-                    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-                    logger.error(
-                        f"telegram_error_notice_send_failed request_id={request_id} "
-                        f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
-                        f"error={notify_error}"
-                    )
-                # Never let Telegram send failures skip finalization ordering.
-                response_delivered = False
-
-        finalize_condition = get_user_finalize_condition(user_id)
-        # Reacquire the shared per-user lock only for finalization ordering and history
-        # mutation. Turn numbers still serialize this section to preserve ordering.
-        async with finalize_condition:
-            while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
-                await finalize_condition.wait()
-
-            try:
-                if not response_delivered:
-                    return
-
-                if get_session_reset_token(user_id, active_session) != reset_token:
-                    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-                    logger.info(
-                        f"conversation_reset_skip_history_update request_id={request_id} "
-                        f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms}"
-                    )
-                    return
-
-                current_history = get_session_history(user_id, active_session)
-                updated_history = current_history + [
-                    f"User: {user_text}",
-                    f"AI: {result}",
-                ]
-                ensure_user_sessions(user_id)[active_session] = updated_history[
-                    -MAX_HISTORY:
-                ]
-                save_bot_state()
-            finally:
-                user_next_turn_to_finalize[user_id] = turn_id + 1
-                finalize_condition.notify_all()
+        response_delivered = await _deliver_telegram_response(
+            update=update,
+            waiting_msg=waiting_msg,
+            result=result,
+            request_id=request_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            request_start_ts=request_start_ts,
+        )
+        await _finalize_message_turn(
+            user_id=user_id,
+            turn_id=turn_id,
+            response_delivered=response_delivered,
+            active_session=active_session,
+            reset_token=reset_token,
+            user_text=user_text,
+            result=result,
+            request_id=request_id,
+            chat_id=chat_id,
+            request_start_ts=request_start_ts,
+        )
     finally:
         async with lock:
             user_in_flight_requests[user_id] = False
