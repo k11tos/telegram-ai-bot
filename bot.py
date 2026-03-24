@@ -28,25 +28,17 @@ from commands.ops import (
     status_command,
     version_command,
 )
-from commands.sessions import (
-    session_clear_command,
-    session_command,
-    session_delete_command,
-    session_rename_command,
-    sessions_command,
-)
+from commands.sessions import SessionCommandDependencies, build_session_handlers
 from gateway_client import (
     AI_GATEWAY_AGENT_BRAIN_PATH,
     GatewayClientError,
     extract_model_names,
     post_agent_brain,
 )
-from session_state import (
-    ensure_user_sessions,
-    get_active_session_name,
-    get_session_history,
-    normalize_session_name,
-)
+from session_state import ensure_user_sessions as ensure_user_sessions_with_state
+from session_state import get_active_session_name as get_active_session_name_with_state
+from session_state import get_session_history as get_session_history_with_state
+from session_state import normalize_session_name as normalize_session_name_with_state
 from state_store import build_state_payload as build_persisted_state_payload
 from state_store import load_bot_state as load_bot_state_from_file
 from state_store import save_bot_state as persist_bot_state
@@ -317,6 +309,38 @@ async def load_gateway_presets(app) -> dict[str, bool]:
         return {"loaded_from_gateway": False, "used_fallback": True}
 
 
+def normalize_session_name(raw_name: str) -> str:
+    return normalize_session_name_with_state(raw_name, DEFAULT_SESSION_NAME)
+
+
+def get_active_session_name(user_id: int) -> str:
+    return get_active_session_name_with_state(
+        user_id,
+        user_active_sessions,
+        DEFAULT_SESSION_NAME,
+    )
+
+
+def ensure_user_sessions(user_id: int) -> dict[str, list[str]]:
+    return ensure_user_sessions_with_state(
+        user_id,
+        conversations,
+        DEFAULT_SESSION_NAME,
+        MAX_HISTORY,
+    )
+
+
+def get_session_history(user_id: int, session_name: str | None = None) -> list[str]:
+    return get_session_history_with_state(
+        user_id,
+        conversations,
+        user_active_sessions,
+        DEFAULT_SESSION_NAME,
+        MAX_HISTORY,
+        session_name,
+    )
+
+
 def get_session_reset_token(user_id: int, session_name: str) -> int:
     per_session_tokens = user_reset_tokens.get(user_id)
     if not isinstance(per_session_tokens, dict):
@@ -533,6 +557,26 @@ def get_user_finalize_condition(user_id):
     if user_id not in user_finalize_conditions:
         user_finalize_conditions[user_id] = asyncio.Condition(lock)
     return user_finalize_conditions[user_id]
+
+
+session_handlers = build_session_handlers(
+    SessionCommandDependencies(
+        default_session_name=DEFAULT_SESSION_NAME,
+        user_active_sessions=user_active_sessions,
+        get_user_lock=get_user_lock,
+        save_bot_state=save_bot_state,
+        increment_session_reset_token=increment_session_reset_token,
+        normalize_session_name=normalize_session_name,
+        get_active_session_name=get_active_session_name,
+        ensure_user_sessions=ensure_user_sessions,
+        get_session_history=get_session_history,
+    )
+)
+session_command = session_handlers.session_command
+sessions_command = session_handlers.sessions_command
+session_rename_command = session_handlers.session_rename_command
+session_delete_command = session_handlers.session_delete_command
+session_clear_command = session_handlers.session_clear_command
 
 
 def get_user_selected_model(user_id: int) -> str | None:
