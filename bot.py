@@ -1051,6 +1051,77 @@ async def _create_waiting_message(
         return None
 
 
+def _map_gateway_request_error(error: Exception) -> tuple[str, str, dict[str, str]]:
+    if isinstance(error, httpx.HTTPStatusError):
+        return (
+            "gateway_error",
+            "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            {},
+        )
+    if isinstance(error, httpx.ConnectTimeout):
+        return (
+            "gateway_connect_timeout",
+            "AI 서버 연결이 지연되고 있어요. 잠시 후 다시 시도해주세요.",
+            {},
+        )
+    if isinstance(error, httpx.ReadTimeout):
+        return (
+            "gateway_read_timeout",
+            "응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.",
+            {},
+        )
+    if isinstance(error, httpx.WriteTimeout):
+        return (
+            "gateway_write_timeout",
+            "요청 전송이 지연되고 있어요. 잠시 후 다시 시도해주세요.",
+            {},
+        )
+    if isinstance(error, httpx.PoolTimeout):
+        return (
+            "gateway_pool_timeout",
+            "요청이 몰리고 있어요. 잠시 후 다시 시도해주세요.",
+            {},
+        )
+    if isinstance(error, httpx.ConnectError):
+        return (
+            "gateway_connect_error",
+            "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            {},
+        )
+    if isinstance(error, httpx.RequestError):
+        return (
+            "gateway_request_error",
+            "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            {"error_type": type(error).__name__},
+        )
+    if isinstance(error, (ValueError, KeyError)):
+        return (
+            "gateway_response_parse_error",
+            "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.",
+            {},
+        )
+    return ("gateway_unexpected_error", "알 수 없는 오류가 발생했습니다.", {})
+
+
+async def _handle_gateway_request_error(
+    waiting_msg,
+    error: Exception,
+    request_id: str,
+    user_id: int,
+    chat_id: int | None,
+    request_start_ts: float,
+) -> None:
+    event_name, user_message, extra_fields = _map_gateway_request_error(error)
+    latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+    extra_parts = " ".join(f"{key}={value}" for key, value in extra_fields.items())
+    extra_segment = f"{extra_parts} " if extra_parts else ""
+    logger.error(
+        f"{event_name} request_id={request_id} user_id={user_id} "
+        f"chat_id={chat_id} latency_ms={latency_ms} {extra_segment}error={error}"
+    )
+    await waiting_msg.edit_text(user_message)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -1119,95 +1190,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 waiting_msg=waiting_msg,
                 request_start_ts=request_start_ts,
             )
-        except httpx.HTTPStatusError as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_error request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.ConnectTimeout as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_connect_timeout request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "AI 서버 연결이 지연되고 있어요. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.ReadTimeout as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_read_timeout request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.WriteTimeout as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_write_timeout request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "요청 전송이 지연되고 있어요. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.PoolTimeout as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_pool_timeout request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "요청이 몰리고 있어요. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.ConnectError as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_connect_error request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except httpx.RequestError as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            request_error_type = type(e).__name__
-            logger.error(
-                f"gateway_request_error request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} "
-                f"error_type={request_error_type} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
-            )
-            return
-        except (ValueError, KeyError) as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_response_parse_error request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
-            )
-            await waiting_msg.edit_text(
-                "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."
-            )
-            return
         except Exception as e:
-            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-            logger.error(
-                f"gateway_unexpected_error request_id={request_id} user_id={user_id} "
-                f"chat_id={chat_id} latency_ms={latency_ms} error={e}"
+            await _handle_gateway_request_error(
+                waiting_msg=waiting_msg,
+                error=e,
+                request_id=request_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                request_start_ts=request_start_ts,
             )
-            await waiting_msg.edit_text("알 수 없는 오류가 발생했습니다.")
             return
 
         response_delivered = await _deliver_telegram_response(
