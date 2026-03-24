@@ -818,8 +818,19 @@ async def _prepare_message_request_state(
         selected_model = get_user_selected_model(user_id)
         active_preset = resolve_active_preset(user_id, presets)
 
-    prompt = build_prompt_with_preset(new_history, active_preset, presets)
-    payload = build_gateway_payload(prompt, selected_model)
+    try:
+        prompt = build_prompt_with_preset(new_history, active_preset, presets)
+        payload = build_gateway_payload(prompt, selected_model)
+    except Exception:
+        async with lock:
+            user_in_flight_requests[user_id] = False
+        finalize_condition = get_user_finalize_condition(user_id)
+        async with finalize_condition:
+            if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                user_next_turn_to_finalize[user_id] = turn_id + 1
+                finalize_condition.notify_all()
+        raise
+
     return {
         "active_session": active_session,
         "reset_token": reset_token,

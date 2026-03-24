@@ -213,6 +213,34 @@ def test_backend_request_error_is_handled_gracefully(make_update_context):
     assert bot.user_in_flight_requests[123] is False
 
 
+def test_request_preparation_failure_does_not_leak_inflight_flag(make_update_context, monkeypatch):
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '정상 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+    update, context = make_update_context(text="첫 요청", client=client)
+
+    def fail_prompt(*args, **kwargs):
+        raise RuntimeError("prep failed")
+
+    monkeypatch.setattr(bot, "build_prompt_with_preset", fail_prompt)
+
+    with pytest.raises(RuntimeError, match="prep failed"):
+        asyncio.run(bot.handle_message(update, context))
+
+    assert bot.user_in_flight_requests[123] is False
+
+    monkeypatch.undo()
+    next_update, next_context = make_update_context(text="다음 요청", client=client)
+    asyncio.run(bot.handle_message(next_update, next_context))
+
+    assert next_update.message.replies[0] == "생각 중…"
+    assert "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요." not in next_update.message.replies
+    assert bot.user_in_flight_requests[123] is False
+
+
 @pytest.mark.parametrize(
     ("history_size", "expected_oldest_index"),
     [
