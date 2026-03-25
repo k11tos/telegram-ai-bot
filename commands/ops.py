@@ -1,5 +1,7 @@
 import time
 import uuid
+from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 import httpx
 from telegram import Update
@@ -9,11 +11,41 @@ from brain_formatter import render_brain_payload
 from gateway_client import GatewayClientError
 
 
-async def reload_presets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+@dataclass(frozen=True)
+class OperationalCommandDependencies:
+    load_gateway_presets: Callable[[object], Awaitable[dict[str, bool]]]
+    get_presets_from_bot_data: Callable[[dict | None], dict[str, dict[str, str]]]
+    help_message: str
+    build_status_message: Callable[[ContextTypes.DEFAULT_TYPE], str]
+    build_version_message: Callable[[], str]
+    logger: object
+    http_client_key: str
+    ai_gateway_ready_path: str
+    post_agent_brain: Callable[..., Awaitable[dict]]
+    split_telegram_text: Callable[[str], list[str]]
+    ai_gateway_models_path: str
+    extract_model_names: Callable[[object], list[str]]
 
-    reload_result = await bot_module.load_gateway_presets(context.application)
-    presets = bot_module.get_presets_from_bot_data(context.application.bot_data)
+
+_ops_dependencies: OperationalCommandDependencies | None = None
+
+
+def configure_operational_dependencies(dependencies: OperationalCommandDependencies) -> None:
+    global _ops_dependencies
+    _ops_dependencies = dependencies
+
+
+def _get_operational_dependencies() -> OperationalCommandDependencies:
+    if _ops_dependencies is None:
+        raise RuntimeError("Operational command dependencies are not configured")
+    return _ops_dependencies
+
+
+async def reload_presets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dependencies = _get_operational_dependencies()
+
+    reload_result = await dependencies.load_gateway_presets(context.application)
+    presets = dependencies.get_presets_from_bot_data(context.application.bot_data)
 
     if reload_result["loaded_from_gateway"] and not reload_result["used_fallback"]:
         preset_names = ", ".join(presets.keys())
@@ -24,38 +56,38 @@ async def reload_presets_command(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+    dependencies = _get_operational_dependencies()
 
-    await update.message.reply_text(bot_module.HELP_MESSAGE)
+    await update.message.reply_text(dependencies.help_message)
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+    dependencies = _get_operational_dependencies()
 
-    await update.message.reply_text(bot_module.build_status_message(context))
+    await update.message.reply_text(dependencies.build_status_message(context))
 
 
 async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+    dependencies = _get_operational_dependencies()
 
-    await update.message.reply_text(bot_module.build_version_message())
+    await update.message.reply_text(dependencies.build_version_message())
 
 
 async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+    dependencies = _get_operational_dependencies()
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
     request_id = uuid.uuid4().hex[:12]
     request_start_ts = time.monotonic()
-    bot_module.logger.info(
+    dependencies.logger.info(
         f"health_check_start request_id={request_id} user_id={user_id} chat_id={chat_id}"
     )
 
-    client = context.application.bot_data.get(bot_module.HTTP_CLIENT_KEY)
+    client = context.application.bot_data.get(dependencies.http_client_key)
     if client is None:
         latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-        bot_module.logger.error(
+        dependencies.logger.error(
             f"health_check_client_missing request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms}"
         )
@@ -64,13 +96,13 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = await client.get(
-            bot_module.AI_GATEWAY_READY_PATH,
+            dependencies.ai_gateway_ready_path,
             headers={"X-Request-Id": request_id},
         )
         response.raise_for_status()
     except (httpx.RequestError, httpx.HTTPStatusError) as error:
         latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-        bot_module.logger.warning(
+        dependencies.logger.warning(
             f"health_check_failed request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
         )
@@ -78,7 +110,7 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-    bot_module.logger.info(
+    dependencies.logger.info(
         f"health_check_success request_id={request_id} user_id={user_id} "
         f"chat_id={chat_id} latency_ms={latency_ms}"
     )
@@ -86,15 +118,15 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+    dependencies = _get_operational_dependencies()
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
     request_id = uuid.uuid4().hex[:12]
 
-    client = context.application.bot_data.get(bot_module.HTTP_CLIENT_KEY)
+    client = context.application.bot_data.get(dependencies.http_client_key)
     if client is None:
-        bot_module.logger.warning(
+        dependencies.logger.warning(
             "brain_gateway_client_missing request_id=%s user_id=%s chat_id=%s",
             request_id,
             user_id,
@@ -104,14 +136,14 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        brain_payload = await bot_module.post_agent_brain(
+        brain_payload = await dependencies.post_agent_brain(
             client,
             payload={},
             request_id=request_id,
         )
     except GatewayClientError as error:
         if error.code == "agent_brain_timeout":
-            bot_module.logger.warning(
+            dependencies.logger.warning(
                 "brain_gateway_timeout request_id=%s user_id=%s chat_id=%s",
                 request_id,
                 user_id,
@@ -119,7 +151,7 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             fallback_message = "brain 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요."
         elif error.code == "agent_brain_connect_error":
-            bot_module.logger.warning(
+            dependencies.logger.warning(
                 "brain_gateway_connect_error request_id=%s user_id=%s chat_id=%s",
                 request_id,
                 user_id,
@@ -127,7 +159,7 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             fallback_message = "gateway에 연결하지 못했습니다."
         elif error.code in {"agent_brain_invalid_json", "agent_brain_malformed_response"}:
-            bot_module.logger.warning(
+            dependencies.logger.warning(
                 "brain_gateway_malformed_response request_id=%s user_id=%s chat_id=%s error=%s",
                 request_id,
                 user_id,
@@ -136,7 +168,7 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             fallback_message = "brain 응답 형식을 처리하지 못했습니다."
         else:
-            bot_module.logger.warning(
+            dependencies.logger.warning(
                 "brain_command_failed request_id=%s user_id=%s chat_id=%s error=%s",
                 request_id,
                 user_id,
@@ -149,27 +181,27 @@ async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     final_message = render_brain_payload(brain_payload)
-    message_chunks = bot_module.split_telegram_text(final_message)
+    message_chunks = dependencies.split_telegram_text(final_message)
     await update.message.reply_text(message_chunks[0])
     for chunk in message_chunks[1:]:
         await update.message.reply_text(chunk)
 
 
 async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import bot as bot_module
+    dependencies = _get_operational_dependencies()
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
     request_id = uuid.uuid4().hex[:12]
     request_start_ts = time.monotonic()
-    bot_module.logger.info(
+    dependencies.logger.info(
         f"models_request_start request_id={request_id} user_id={user_id} chat_id={chat_id}"
     )
 
-    client = context.application.bot_data.get(bot_module.HTTP_CLIENT_KEY)
+    client = context.application.bot_data.get(dependencies.http_client_key)
     if client is None:
         latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-        bot_module.logger.error(
+        dependencies.logger.error(
             f"models_http_client_missing request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms}"
         )
@@ -178,14 +210,14 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = await client.get(
-            bot_module.AI_GATEWAY_MODELS_PATH,
+            dependencies.ai_gateway_models_path,
             headers={"X-Request-Id": request_id},
         )
         response.raise_for_status()
-        model_names = bot_module.extract_model_names(response.json())
+        model_names = dependencies.extract_model_names(response.json())
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
         latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-        bot_module.logger.warning(
+        dependencies.logger.warning(
             f"models_request_failed request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
         )
@@ -194,7 +226,7 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not model_names:
         latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-        bot_module.logger.info(
+        dependencies.logger.info(
             f"models_request_empty request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms}"
         )
@@ -207,7 +239,7 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         listed_models += "\n- ..."
 
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-    bot_module.logger.info(
+    dependencies.logger.info(
         f"models_request_success request_id={request_id} user_id={user_id} "
         f"chat_id={chat_id} latency_ms={latency_ms} model_count={len(model_names)}"
     )

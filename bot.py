@@ -19,7 +19,9 @@ from telegram.ext import (
 )
 
 from commands.ops import (
+    OperationalCommandDependencies,
     brain_command,
+    configure_operational_dependencies,
     health_command,
     help_command,
     models_command,
@@ -1414,6 +1416,33 @@ async def close_http_client(app):
     if client is not None:
         await client.aclose()
 
+
+
+
+async def _post_agent_brain_bridge(
+    client: httpx.AsyncClient,
+    payload: dict,
+    request_id: str | None = None,
+) -> dict:
+    return await post_agent_brain(client, payload=payload, request_id=request_id)
+
+
+configure_operational_dependencies(
+    OperationalCommandDependencies(
+        load_gateway_presets=load_gateway_presets,
+        get_presets_from_bot_data=get_presets_from_bot_data,
+        help_message=HELP_MESSAGE,
+        build_status_message=build_status_message,
+        build_version_message=build_version_message,
+        logger=logger,
+        http_client_key=HTTP_CLIENT_KEY,
+        ai_gateway_ready_path=AI_GATEWAY_READY_PATH,
+        post_agent_brain=_post_agent_brain_bridge,
+        split_telegram_text=split_telegram_text,
+        ai_gateway_models_path=AI_GATEWAY_MODELS_PATH,
+        extract_model_names=extract_model_names,
+    )
+)
 
 def main():
     if not BOT_TOKEN:
