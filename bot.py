@@ -933,10 +933,7 @@ async def _deliver_telegram_response(
 ) -> bool:
     response_delivered = True
     try:
-        final_chunks = split_telegram_text(result)
-        await waiting_msg.edit_text(final_chunks[0])
-        for chunk in final_chunks[1:]:
-            await update.message.reply_text(chunk)
+        await _send_chunked_message_via_waiting_message(update, waiting_msg, result)
         latency_ms = int((time.monotonic() - request_start_ts) * 1000)
         logger.info(
             f"response_delivered request_id={request_id} user_id={user_id} "
@@ -949,9 +946,7 @@ async def _deliver_telegram_response(
             f"chat_id={chat_id} latency_ms={latency_ms} error={edit_error}"
         )
         try:
-            final_chunks = split_telegram_text(result)
-            for chunk in final_chunks:
-                await update.message.reply_text(chunk)
+            await _send_chunked_message_as_replies(update, result)
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.info(
                 f"response_delivered request_id={request_id} user_id={user_id} "
@@ -1028,27 +1023,72 @@ async def _finalize_message_turn(
 
 async def _create_waiting_message(
     update: Update,
+    waiting_text: str,
+    *,
+    error_event_name: str,
+    user_id: int | None = None,
+    chat_id: int | None = None,
+    request_id: str | None = None,
+    request_start_ts: float | None = None,
+    turn_id: int | None = None,
+    advance_finalize_on_failure: bool = False,
+):
+    try:
+        return await update.message.reply_text(waiting_text)
+    except Exception as waiting_msg_error:
+        if request_id is not None and request_start_ts is not None and user_id is not None:
+            latency_ms = int((time.monotonic() - request_start_ts) * 1000)
+            logger.error(
+                f"{error_event_name} request_id={request_id} "
+                f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
+                f"error={waiting_msg_error}"
+            )
+
+        if advance_finalize_on_failure and user_id is not None and turn_id is not None:
+            finalize_condition = get_user_finalize_condition(user_id)
+            async with finalize_condition:
+                if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                    user_next_turn_to_finalize[user_id] = turn_id + 1
+                    finalize_condition.notify_all()
+
+        return None
+
+
+async def _send_chunked_message_via_waiting_message(
+    update: Update,
+    waiting_msg,
+    text: str,
+) -> None:
+    chunks = split_telegram_text(text)
+    await waiting_msg.edit_text(chunks[0])
+    for chunk in chunks[1:]:
+        await update.message.reply_text(chunk)
+
+
+async def _send_chunked_message_as_replies(update: Update, text: str) -> None:
+    for chunk in split_telegram_text(text):
+        await update.message.reply_text(chunk)
+
+
+async def _create_chat_waiting_message(
+    update: Update,
     user_id: int,
     chat_id: int | None,
     request_id: str,
     request_start_ts: float,
     turn_id: int,
 ):
-    try:
-        return await update.message.reply_text("생각 중…")
-    except Exception as waiting_msg_error:
-        latency_ms = int((time.monotonic() - request_start_ts) * 1000)
-        logger.error(
-            f"telegram_waiting_message_failed request_id={request_id} "
-            f"user_id={user_id} chat_id={chat_id} latency_ms={latency_ms} "
-            f"error={waiting_msg_error}"
-        )
-        finalize_condition = get_user_finalize_condition(user_id)
-        async with finalize_condition:
-            if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                user_next_turn_to_finalize[user_id] = turn_id + 1
-                finalize_condition.notify_all()
-        return None
+    return await _create_waiting_message(
+        update=update,
+        waiting_text="생각 중…",
+        error_event_name="telegram_waiting_message_failed",
+        user_id=user_id,
+        chat_id=chat_id,
+        request_id=request_id,
+        request_start_ts=request_start_ts,
+        turn_id=turn_id,
+        advance_finalize_on_failure=True,
+    )
 
 
 def _map_gateway_request_error(error: Exception) -> tuple[str, str, dict[str, str]]:
@@ -1156,7 +1196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = request_state["payload"]
 
     try:
-        waiting_msg = await _create_waiting_message(
+        waiting_msg = await _create_chat_waiting_message(
             update=update,
             user_id=user_id,
             chat_id=chat_id,
@@ -1272,9 +1312,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        try:
-            waiting_msg = await update.message.reply_text("파일을 읽고 요약 중…")
-        except Exception:
+        waiting_msg = await _create_waiting_message(
+            update=update,
+            waiting_text="파일을 읽고 요약 중…",
+            error_event_name="document_waiting_message_failed",
+            user_id=user_id,
+            chat_id=chat_id,
+            request_id=request_id,
+            request_start_ts=request_start_ts,
+        )
+        if waiting_msg is None:
             return
 
         try:
@@ -1312,11 +1359,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             response.raise_for_status()
             summary = response.json()["response"]
-            summary_chunks = split_telegram_text(summary)
             try:
-                await waiting_msg.edit_text(summary_chunks[0])
-                for chunk in summary_chunks[1:]:
-                    await update.message.reply_text(chunk)
+                await _send_chunked_message_via_waiting_message(
+                    update, waiting_msg, summary
+                )
             except Exception as edit_error:
                 logger.warning(
                     "document_summary_edit_failed request_id=%s user_id=%s chat_id=%s error=%s",
@@ -1325,8 +1371,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_id,
                     edit_error,
                 )
-                for chunk in summary_chunks:
-                    await update.message.reply_text(chunk)
+                await _send_chunked_message_as_replies(update, summary)
         except httpx.HTTPStatusError as error:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.warning(
