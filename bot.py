@@ -661,11 +661,15 @@ def build_prompt_with_preset(
 
 
 def build_gateway_payload(
-    prompt: str, selected_model: str | None = None
+    prompt: str,
+    selected_model: str | None = None,
+    selected_preset: str | None = None,
 ) -> dict[str, str]:
     payload = {"prompt": prompt}
     if selected_model:
         payload["model"] = selected_model
+    if selected_preset:
+        payload["preset"] = selected_preset
     return payload
 
 
@@ -842,8 +846,12 @@ async def _prepare_message_request_state(
         active_preset = resolve_active_preset(user_id, presets)
 
     try:
-        prompt = build_prompt_with_preset(new_history, active_preset, presets)
-        payload = build_gateway_payload(prompt, selected_model)
+        prompt = "\n".join(new_history) + "\nAI:"
+        payload = build_gateway_payload(
+            prompt,
+            selected_model=selected_model,
+            selected_preset=active_preset,
+        )
     except Exception:
         async with lock:
             runtime_state.user_in_flight_requests[user_id] = False

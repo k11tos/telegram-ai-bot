@@ -132,7 +132,10 @@ def test_first_message_initializes_history_and_calls_gateway(make_update_context
     assert update.message.waiting_message.edits[-1] == "안녕하세요"
     assert len(client.stream_calls) == 1
     assert client.stream_calls[0]["path"] == bot.AI_GATEWAY_STREAM_PATH
-    assert client.stream_calls[0]["json"] == {"prompt": "User: 처음 질문\nAI:"}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 처음 질문\nAI:",
+        "preset": "normal",
+    }
     assert client.post_calls == []
 
 
@@ -176,7 +179,10 @@ def test_existing_conversation_trims_and_preserves_latest_history(make_update_co
     asyncio.run(bot.handle_message(update, context))
 
     expected_prompt_history = (old_history + ["User: 새 질문"])[-bot.MAX_HISTORY :]
-    assert client.stream_calls[0]["json"] == {"prompt": "\n".join(expected_prompt_history) + "\nAI:"}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "\n".join(expected_prompt_history) + "\nAI:",
+        "preset": "normal",
+    }
 
     expected_saved = (old_history + ["User: 새 질문", "AI: 새 답변"])[-bot.MAX_HISTORY :]
     assert bot.get_session_history(user_id) == expected_saved
@@ -340,10 +346,10 @@ def test_request_preparation_failure_does_not_leak_inflight_flag(make_update_con
     )
     update, context = make_update_context(text="첫 요청", client=client)
 
-    def fail_prompt(*args, **kwargs):
+    def fail_payload(*args, **kwargs):
         raise RuntimeError("prep failed")
 
-    monkeypatch.setattr(bot, "build_prompt_with_preset", fail_prompt)
+    monkeypatch.setattr(bot, "build_gateway_payload", fail_payload)
 
     with pytest.raises(RuntimeError, match="prep failed"):
         asyncio.run(bot.handle_message(update, context))
@@ -402,7 +408,8 @@ def test_prompt_includes_exact_history_order_and_role_prefixes(make_update_conte
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {
-        "prompt": "User: 첫 질문\nAI: 첫 답변\nUser: 둘째 질문\nAI: 둘째 답변\nUser: 셋째 질문\nAI:"
+        "prompt": "User: 첫 질문\nAI: 첫 답변\nUser: 둘째 질문\nAI: 둘째 답변\nUser: 셋째 질문\nAI:",
+        "preset": "normal",
     }
 
 
@@ -483,7 +490,10 @@ def test_empty_user_input_still_constructs_deterministic_prompt(make_update_cont
 
     asyncio.run(bot.handle_message(update, context))
 
-    assert client.stream_calls[0]["json"] == {"prompt": "User: \nAI:"}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: \nAI:",
+        "preset": "normal",
+    }
     assert bot.get_session_history(123) == ["User: ", "AI: 빈 입력 응답"]
 
 
@@ -704,7 +714,11 @@ def test_selected_model_is_included_in_gateway_payloads(make_update_context):
 
     asyncio.run(bot.handle_message(update, context))
 
-    expected_payload = {"prompt": "User: 모델 질문\nAI:", "model": "gpt-4o-mini"}
+    expected_payload = {
+        "prompt": "User: 모델 질문\nAI:",
+        "model": "gpt-4o-mini",
+        "preset": "normal",
+    }
     assert client.stream_calls[0]["json"] == expected_payload
     assert client.post_calls[0]["json"] == expected_payload
 
@@ -717,7 +731,10 @@ def test_empty_selected_model_falls_back_to_default_gateway_behavior(make_update
 
     asyncio.run(bot.handle_message(update, context))
 
-    assert client.stream_calls[0]["json"] == {"prompt": "User: 기본 질문\nAI:"}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 기본 질문\nAI:",
+        "preset": "normal",
+    }
 
 
 def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_update_context):
@@ -728,7 +745,10 @@ def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_u
 
     asyncio.run(bot.handle_message(update, context))
 
-    assert client.stream_calls[0]["json"] == {"prompt": "User: 공백 질문\nAI:"}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 공백 질문\nAI:",
+        "preset": "normal",
+    }
 
 
 def test_preset_constants_are_defined_centrally():
@@ -777,7 +797,7 @@ def test_build_prompt_with_normal_preset_keeps_existing_prompt_format():
     assert prompt == "User: hi\nAI:"
 
 
-def test_handle_message_uses_active_preset_prefix_for_non_default_preset(make_update_context):
+def test_handle_message_forwards_active_preset_in_gateway_payload(make_update_context):
     user_id = 808
     bot.user_selected_presets[user_id] = "coder"
     client = FakeClient(
@@ -790,14 +810,13 @@ def test_handle_message_uses_active_preset_prefix_for_non_default_preset(make_up
     update, context = make_update_context(user_id=user_id, text="리팩토링 해줘", client=client)
     asyncio.run(bot.handle_message(update, context))
 
-    expected_prompt = (
-        f"{bot.STATIC_PRESET_DEFINITIONS['coder']['prompt_prefix']}"
-        "User: 리팩토링 해줘\nAI:"
-    )
-    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 리팩토링 해줘\nAI:",
+        "preset": "coder",
+    }
 
 
-def test_invalid_preset_falls_back_to_normal_without_prefix(make_update_context):
+def test_invalid_preset_falls_back_to_normal_in_payload(make_update_context):
     user_id = 909
     bot.user_selected_presets[user_id] = "unsupported"
     client = FakeClient(
@@ -811,7 +830,10 @@ def test_invalid_preset_falls_back_to_normal_without_prefix(make_update_context)
     asyncio.run(bot.handle_message(update, context))
 
     assert bot.resolve_active_preset(user_id) == "normal"
-    assert client.stream_calls[0]["json"] == {"prompt": "User: 기본 동작\nAI:"}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 기본 동작\nAI:",
+        "preset": "normal",
+    }
 
 
 def test_preset_is_normalized_before_resolution():
@@ -821,7 +843,7 @@ def test_preset_is_normalized_before_resolution():
     assert bot.resolve_active_preset(user_id) == "coder"
 
 
-def test_setting_english_preset_via_command_applies_to_followup_message(make_update_context):
+def test_setting_english_preset_via_command_applies_to_followup_payload(make_update_context):
     user_id = 913
     preset_update, preset_context = make_update_context(
         user_id=user_id,
@@ -846,15 +868,14 @@ def test_setting_english_preset_via_command_applies_to_followup_message(make_upd
 
     asyncio.run(bot.handle_message(message_update, message_context))
 
-    expected_prompt = (
-        f"{bot.STATIC_PRESET_DEFINITIONS['english']['prompt_prefix']}"
-        "User: Please summarize\nAI:"
-    )
     assert bot.user_selected_presets[user_id] == "english"
-    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: Please summarize\nAI:",
+        "preset": "english",
+    }
 
 
-def test_english_preset_prefix_is_applied_to_prompt(make_update_context):
+def test_english_preset_is_forwarded_in_payload(make_update_context):
     user_id = 911
     bot.user_selected_presets[user_id] = "english"
     client = FakeClient(
@@ -867,14 +888,13 @@ def test_english_preset_prefix_is_applied_to_prompt(make_update_context):
     update, context = make_update_context(user_id=user_id, text="Please answer", client=client)
     asyncio.run(bot.handle_message(update, context))
 
-    expected_prompt = (
-        f"{bot.STATIC_PRESET_DEFINITIONS['english']['prompt_prefix']}"
-        "User: Please answer\nAI:"
-    )
-    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: Please answer\nAI:",
+        "preset": "english",
+    }
 
 
-def test_quant_preset_prefix_is_applied_to_prompt(make_update_context):
+def test_quant_preset_is_forwarded_in_payload(make_update_context):
     user_id = 912
     bot.user_selected_presets[user_id] = "quant"
     client = FakeClient(
@@ -887,8 +907,7 @@ def test_quant_preset_prefix_is_applied_to_prompt(make_update_context):
     update, context = make_update_context(user_id=user_id, text="분석해줘", client=client)
     asyncio.run(bot.handle_message(update, context))
 
-    expected_prompt = (
-        f"{bot.STATIC_PRESET_DEFINITIONS['quant']['prompt_prefix']}"
-        "User: 분석해줘\nAI:"
-    )
-    assert client.stream_calls[0]["json"] == {"prompt": expected_prompt}
+    assert client.stream_calls[0]["json"] == {
+        "prompt": "User: 분석해줘\nAI:",
+        "preset": "quant",
+    }
