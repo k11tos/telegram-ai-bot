@@ -44,6 +44,7 @@ from gateway_client import (
     extract_model_names,
     post_agent_brain,
 )
+from prompt_builder import build_prompt_with_preset as build_prompt_with_preset_helper
 from session_state import ensure_user_sessions as ensure_user_sessions_with_state
 from session_state import get_active_session_name as get_active_session_name_with_state
 from session_state import get_session_history as get_session_history_with_state
@@ -642,14 +643,8 @@ def build_prompt_with_preset(
     active_preset: str,
     presets: dict[str, dict[str, str]] | None = None,
 ) -> str:
-    prompt = "\n".join(history_lines) + "\nAI:"
     available_presets = presets if presets is not None else get_static_presets()
-    preset_definition = available_presets.get(active_preset, {})
-    preset_prefix = preset_definition.get("prompt_prefix", "")
-    if not preset_prefix:
-        return prompt
-
-    return f"{preset_prefix}{prompt}"
+    return build_prompt_with_preset_helper(history_lines, active_preset, available_presets)
 
 
 def build_gateway_payload(
