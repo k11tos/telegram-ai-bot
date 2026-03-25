@@ -29,6 +29,12 @@ from commands.ops import (
     version_command,
 )
 from commands.sessions import SessionCommandDependencies, build_session_handlers
+from document_summary import (
+    DocumentValidationError,
+    build_document_summary_prompt as build_document_summary_prompt_helper,
+    is_supported_document as is_supported_document_helper,
+    summarize_document_text,
+)
 from gateway_client import (
     AI_GATEWAY_AGENT_BRAIN_PATH,
     GatewayClientError,
@@ -637,10 +643,7 @@ def build_gateway_payload(
 
 
 def is_supported_document(file_name: str | None) -> bool:
-    if not isinstance(file_name, str):
-        return False
-    lowered = file_name.lower()
-    return any(lowered.endswith(ext) for ext in SUPPORTED_DOCUMENT_EXTENSIONS)
+    return is_supported_document_helper(file_name, SUPPORTED_DOCUMENT_EXTENSIONS)
 
 
 def build_supported_document_filter():
@@ -655,14 +658,7 @@ def build_supported_document_filter():
 
 
 def build_document_summary_prompt(file_name: str, content: str) -> str:
-    return (
-        "다음 문서를 한국어로 간결하게 요약해줘.\n"
-        "요구사항:\n"
-        "- 핵심 내용을 3~5개 bullet로 정리\n"
-        "- 전체 요약은 짧고 명확하게 유지\n"
-        f"- 파일명: {file_name}\n\n"
-        f"문서 원문:\n{content}"
-    )
+    return build_document_summary_prompt_helper(file_name, content)
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1325,24 +1321,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            telegram_file = await context.bot.get_file(document.file_id)
-            file_bytes = bytes(await telegram_file.download_as_bytearray())
-            if len(file_bytes) > MAX_DOCUMENT_BYTES:
-                await waiting_msg.edit_text(
-                    f"파일이 너무 큽니다. 최대 {MAX_DOCUMENT_BYTES}바이트까지 처리할 수 있어요."
-                )
-                return
-
-            try:
-                text_content = file_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                await waiting_msg.edit_text(
-                    "UTF-8 텍스트 파일만 처리할 수 있어요. 인코딩을 확인한 뒤 다시 업로드해주세요."
-                )
-                return
-
-            text_content = text_content[:MAX_DOCUMENT_PROMPT_CHARS]
-
             client = context.application.bot_data.get(HTTP_CLIENT_KEY)
             if client is None:
                 await waiting_msg.edit_text(
@@ -1350,15 +1328,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            prompt = build_document_summary_prompt(file_name, text_content)
-            payload = build_gateway_payload(prompt)
-            response = await client.post(
-                AI_GATEWAY_CHAT_PATH,
-                json=payload,
-                headers={"X-Request-Id": request_id},
+            summary = await summarize_document_text(
+                document=document,
+                telegram_bot=context.bot,
+                client=client,
+                request_id=request_id,
+                chat_path=AI_GATEWAY_CHAT_PATH,
+                max_document_bytes=MAX_DOCUMENT_BYTES,
+                max_document_prompt_chars=MAX_DOCUMENT_PROMPT_CHARS,
             )
-            response.raise_for_status()
-            summary = response.json()["response"]
             try:
                 await _send_chunked_message_via_waiting_message(
                     update, waiting_msg, summary
@@ -1372,6 +1350,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     edit_error,
                 )
                 await _send_chunked_message_as_replies(update, summary)
+        except DocumentValidationError as error:
+            await waiting_msg.edit_text(error.message)
         except httpx.HTTPStatusError as error:
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.warning(
