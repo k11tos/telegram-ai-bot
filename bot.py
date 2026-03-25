@@ -44,6 +44,13 @@ from gateway_client import (
     extract_model_names,
     post_agent_brain,
 )
+from preset_catalog import (
+    PRESET_DESCRIPTION_FIELD,
+    PRESET_PROMPT_PREFIX_FIELD,
+    get_preset_names,
+    has_preset,
+    normalize_preset_name,
+)
 from prompt_builder import build_prompt_with_preset as build_prompt_with_preset_helper
 from session_state import ensure_user_sessions as ensure_user_sessions_with_state
 from session_state import get_active_session_name as get_active_session_name_with_state
@@ -256,8 +263,8 @@ def load_bot_state() -> None:
 def get_static_presets() -> dict[str, dict[str, str]]:
     return {
         name: {
-            "description": preset["description"],
-            "prompt_prefix": preset["prompt_prefix"],
+            PRESET_DESCRIPTION_FIELD: preset[PRESET_DESCRIPTION_FIELD],
+            PRESET_PROMPT_PREFIX_FIELD: preset[PRESET_PROMPT_PREFIX_FIELD],
         }
         for name, preset in STATIC_PRESET_DEFINITIONS.items()
     }
@@ -280,15 +287,15 @@ def normalize_gateway_presets(payload) -> dict[str, dict[str, str]]:
         if not isinstance(raw_name, str):
             continue
 
-        name = raw_name.strip().lower()
+        name = normalize_preset_name(raw_name)
         if not name:
             continue
 
         description = item.get("description")
         prompt_prefix = item.get("prompt_prefix")
         normalized[name] = {
-            "description": description.strip() if isinstance(description, str) else "",
-            "prompt_prefix": prompt_prefix if isinstance(prompt_prefix, str) else "",
+            PRESET_DESCRIPTION_FIELD: description.strip() if isinstance(description, str) else "",
+            PRESET_PROMPT_PREFIX_FIELD: prompt_prefix if isinstance(prompt_prefix, str) else "",
         }
 
     return normalized
@@ -305,7 +312,7 @@ def get_presets_from_bot_data(
 
 
 def get_supported_preset_names(bot_data: dict | None = None) -> tuple[str, ...]:
-    return tuple(get_presets_from_bot_data(bot_data).keys())
+    return get_preset_names(get_presets_from_bot_data(bot_data))
 
 
 async def load_gateway_presets(app) -> dict[str, bool]:
@@ -621,7 +628,7 @@ def get_user_selected_preset(
     if not isinstance(selected_preset, str):
         return None
 
-    normalized_preset = selected_preset.strip().lower()
+    normalized_preset = normalize_preset_name(selected_preset)
     available_presets = presets if presets is not None else get_static_presets()
     if normalized_preset not in available_presets:
         return None
@@ -765,12 +772,12 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    requested_preset = " ".join(context.args).strip().lower() if context.args else ""
+    requested_preset = normalize_preset_name(" ".join(context.args)) if context.args else ""
 
     presets = get_presets_from_bot_data(context.application.bot_data)
 
     if requested_preset:
-        if requested_preset not in presets:
+        if not has_preset(presets, requested_preset):
             supported_presets_text = ", ".join(presets.keys())
             await update.message.reply_text(
                 f"지원하지 않는 프리셋입니다. 사용 가능: {supported_presets_text}"
