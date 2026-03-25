@@ -241,6 +241,12 @@ def save_bot_state() -> None:
     )
 
 
+def request_state_save(reason: str = "unspecified") -> None:
+    # Centralized save-intent entrypoint for future save throttling.
+    _ = reason
+    save_bot_state()
+
+
 def load_bot_state() -> None:
     loaded_state = load_bot_state_from_file(
         STATE_FILE_PATH,
@@ -597,7 +603,7 @@ session_handlers = build_session_handlers(
         default_session_name=DEFAULT_SESSION_NAME,
         user_active_sessions=runtime_state.user_active_sessions,
         get_user_lock=get_user_lock,
-        save_bot_state=save_bot_state,
+        save_bot_state=request_state_save,
         increment_session_reset_token=increment_session_reset_token,
         normalize_session_name=normalize_session_name,
         get_active_session_name=get_active_session_name,
@@ -689,7 +695,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_session = get_active_session_name(user_id)
         get_session_history(user_id, active_session).clear()
         increment_session_reset_token(user_id, active_session)
-        save_bot_state()
+        request_state_save("reset")
     await update.message.reply_text("대화 기록을 초기화했습니다.")
 
 
@@ -712,7 +718,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lock = get_user_lock(user_id)
         async with lock:
             runtime_state.user_selected_models.pop(user_id, None)
-            save_bot_state()
+            request_state_save("model_reset")
         await update.message.reply_text(
             "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
         )
@@ -760,7 +766,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lock = get_user_lock(user_id)
     async with lock:
         runtime_state.user_selected_models[user_id] = requested_model
-        save_bot_state()
+        request_state_save("model_change")
 
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
     logger.info(
@@ -787,7 +793,7 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lock = get_user_lock(user_id)
         async with lock:
             runtime_state.user_selected_presets[user_id] = requested_preset
-            save_bot_state()
+            request_state_save("preset_change")
         await update.message.reply_text(f"프리셋이 변경되었습니다: {requested_preset}")
         return
 
@@ -1032,7 +1038,7 @@ async def _finalize_message_turn(
                 f"AI: {result}",
             ]
             ensure_user_sessions(user_id)[active_session] = updated_history[-MAX_HISTORY:]
-            save_bot_state()
+            request_state_save("conversation_finalize")
         finally:
             runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
             finalize_condition.notify_all()
