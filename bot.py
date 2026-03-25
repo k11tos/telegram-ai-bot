@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import json
+from dataclasses import dataclass, field
 import logging
 import os
 import re
@@ -112,17 +113,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 사용자별 대화 저장
-conversations = {}
-user_active_sessions = {}
-user_locks = {}
-user_reset_tokens = {}
-user_turn_counters = {}
-user_next_turn_to_finalize = {}
-user_finalize_conditions = {}
-user_in_flight_requests = {}
-user_selected_models = {}
-user_selected_presets = {}
+@dataclass
+class RuntimeState:
+    conversations: dict[int, dict[str, list[str]]] = field(default_factory=dict)
+    user_active_sessions: dict[int, str] = field(default_factory=dict)
+    user_locks: dict[int, asyncio.Lock] = field(default_factory=dict)
+    user_reset_tokens: dict[int, dict[str, int]] = field(default_factory=dict)
+    user_turn_counters: dict[int, int] = field(default_factory=dict)
+    user_next_turn_to_finalize: dict[int, int] = field(default_factory=dict)
+    user_finalize_conditions: dict[int, asyncio.Condition] = field(default_factory=dict)
+    user_in_flight_requests: dict[int, bool] = field(default_factory=dict)
+    user_selected_models: dict[int, str] = field(default_factory=dict)
+    user_selected_presets: dict[int, str] = field(default_factory=dict)
+
+
+runtime_state = RuntimeState()
+
+# Backward-compatible aliases for existing tests/importers.
+conversations = runtime_state.conversations
+user_active_sessions = runtime_state.user_active_sessions
+user_locks = runtime_state.user_locks
+user_reset_tokens = runtime_state.user_reset_tokens
+user_turn_counters = runtime_state.user_turn_counters
+user_next_turn_to_finalize = runtime_state.user_next_turn_to_finalize
+user_finalize_conditions = runtime_state.user_finalize_conditions
+user_in_flight_requests = runtime_state.user_in_flight_requests
+user_selected_models = runtime_state.user_selected_models
+user_selected_presets = runtime_state.user_selected_presets
 MODEL_RESET_ALIASES = {"default", "reset"}
 
 LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
@@ -197,10 +214,10 @@ COMMIT_ENV_KEYS = ("GIT_COMMIT_SHA", "COMMIT_SHA", "GITHUB_SHA")
 
 def build_state_payload() -> dict[str, object]:
     return build_persisted_state_payload(
-        conversations,
-        user_active_sessions,
-        user_selected_models,
-        user_selected_presets,
+        runtime_state.conversations,
+        runtime_state.user_active_sessions,
+        runtime_state.user_selected_models,
+        runtime_state.user_selected_presets,
     )
 
 
@@ -208,10 +225,10 @@ def save_bot_state() -> None:
     persist_bot_state(
         STATE_FILE_PATH,
         LOCAL_DATA_DIR,
-        conversations,
-        user_active_sessions,
-        user_selected_models,
-        user_selected_presets,
+        runtime_state.conversations,
+        runtime_state.user_active_sessions,
+        runtime_state.user_selected_models,
+        runtime_state.user_selected_presets,
         logger,
     )
 
@@ -225,14 +242,14 @@ def load_bot_state() -> None:
         logger,
     )
 
-    conversations.clear()
-    conversations.update(loaded_state["conversations"])
-    user_active_sessions.clear()
-    user_active_sessions.update(loaded_state["active_sessions"])
-    user_selected_models.clear()
-    user_selected_models.update(loaded_state["selected_models"])
-    user_selected_presets.clear()
-    user_selected_presets.update(loaded_state["selected_presets"])
+    runtime_state.conversations.clear()
+    runtime_state.conversations.update(loaded_state["conversations"])
+    runtime_state.user_active_sessions.clear()
+    runtime_state.user_active_sessions.update(loaded_state["active_sessions"])
+    runtime_state.user_selected_models.clear()
+    runtime_state.user_selected_models.update(loaded_state["selected_models"])
+    runtime_state.user_selected_presets.clear()
+    runtime_state.user_selected_presets.update(loaded_state["selected_presets"])
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
@@ -324,7 +341,7 @@ def normalize_session_name(raw_name: str) -> str:
 def get_active_session_name(user_id: int) -> str:
     return get_active_session_name_with_state(
         user_id,
-        user_active_sessions,
+        runtime_state.user_active_sessions,
         DEFAULT_SESSION_NAME,
     )
 
@@ -332,7 +349,7 @@ def get_active_session_name(user_id: int) -> str:
 def ensure_user_sessions(user_id: int) -> dict[str, list[str]]:
     return ensure_user_sessions_with_state(
         user_id,
-        conversations,
+        runtime_state.conversations,
         DEFAULT_SESSION_NAME,
         MAX_HISTORY,
     )
@@ -341,8 +358,8 @@ def ensure_user_sessions(user_id: int) -> dict[str, list[str]]:
 def get_session_history(user_id: int, session_name: str | None = None) -> list[str]:
     return get_session_history_with_state(
         user_id,
-        conversations,
-        user_active_sessions,
+        runtime_state.conversations,
+        runtime_state.user_active_sessions,
         DEFAULT_SESSION_NAME,
         MAX_HISTORY,
         session_name,
@@ -350,10 +367,10 @@ def get_session_history(user_id: int, session_name: str | None = None) -> list[s
 
 
 def get_session_reset_token(user_id: int, session_name: str) -> int:
-    per_session_tokens = user_reset_tokens.get(user_id)
+    per_session_tokens = runtime_state.user_reset_tokens.get(user_id)
     if not isinstance(per_session_tokens, dict):
         per_session_tokens = {}
-        user_reset_tokens[user_id] = per_session_tokens
+        runtime_state.user_reset_tokens[user_id] = per_session_tokens
 
     normalized_session_name = normalize_session_name(session_name)
     token = per_session_tokens.get(normalized_session_name)
@@ -367,7 +384,7 @@ def get_session_reset_token(user_id: int, session_name: str) -> int:
 def increment_session_reset_token(user_id: int, session_name: str) -> int:
     current_token = get_session_reset_token(user_id, session_name)
     next_token = current_token + 1
-    user_reset_tokens[user_id][normalize_session_name(session_name)] = next_token
+    runtime_state.user_reset_tokens[user_id][normalize_session_name(session_name)] = next_token
     return next_token
 
 
@@ -555,22 +572,22 @@ def extract_stream_delta(raw_line: str) -> tuple[str, bool]:
 
 
 def get_user_lock(user_id):
-    if user_id not in user_locks:
-        user_locks[user_id] = asyncio.Lock()
-    return user_locks[user_id]
+    if user_id not in runtime_state.user_locks:
+        runtime_state.user_locks[user_id] = asyncio.Lock()
+    return runtime_state.user_locks[user_id]
 
 
 def get_user_finalize_condition(user_id):
     lock = get_user_lock(user_id)
-    if user_id not in user_finalize_conditions:
-        user_finalize_conditions[user_id] = asyncio.Condition(lock)
-    return user_finalize_conditions[user_id]
+    if user_id not in runtime_state.user_finalize_conditions:
+        runtime_state.user_finalize_conditions[user_id] = asyncio.Condition(lock)
+    return runtime_state.user_finalize_conditions[user_id]
 
 
 session_handlers = build_session_handlers(
     SessionCommandDependencies(
         default_session_name=DEFAULT_SESSION_NAME,
-        user_active_sessions=user_active_sessions,
+        user_active_sessions=runtime_state.user_active_sessions,
         get_user_lock=get_user_lock,
         save_bot_state=save_bot_state,
         increment_session_reset_token=increment_session_reset_token,
@@ -588,7 +605,7 @@ session_clear_command = session_handlers.session_clear_command
 
 
 def get_user_selected_model(user_id: int) -> str | None:
-    selected_model = user_selected_models.get(user_id)
+    selected_model = runtime_state.user_selected_models.get(user_id)
     if not isinstance(selected_model, str):
         return None
 
@@ -599,7 +616,7 @@ def get_user_selected_model(user_id: int) -> str | None:
 def get_user_selected_preset(
     user_id: int, presets: dict[str, dict[str, str]] | None = None
 ) -> str | None:
-    selected_preset = user_selected_presets.get(user_id)
+    selected_preset = runtime_state.user_selected_presets.get(user_id)
     if not isinstance(selected_preset, str):
         return None
 
@@ -692,7 +709,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if requested_model.lower() in MODEL_RESET_ALIASES:
         lock = get_user_lock(user_id)
         async with lock:
-            user_selected_models.pop(user_id, None)
+            runtime_state.user_selected_models.pop(user_id, None)
             save_bot_state()
         await update.message.reply_text(
             "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
@@ -740,7 +757,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lock = get_user_lock(user_id)
     async with lock:
-        user_selected_models[user_id] = requested_model
+        runtime_state.user_selected_models[user_id] = requested_model
         save_bot_state()
 
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -767,7 +784,7 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lock = get_user_lock(user_id)
         async with lock:
-            user_selected_presets[user_id] = requested_preset
+            runtime_state.user_selected_presets[user_id] = requested_preset
             save_bot_state()
         await update.message.reply_text(f"프리셋이 변경되었습니다: {requested_preset}")
         return
@@ -788,14 +805,14 @@ async def _prepare_message_request_state(
     async with lock:
         active_session = get_active_session_name(user_id)
         history = get_session_history(user_id, active_session)
-        if user_id not in user_turn_counters:
-            user_turn_counters[user_id] = 0
-        if user_id not in user_next_turn_to_finalize:
-            user_next_turn_to_finalize[user_id] = 1
-        if user_id not in user_in_flight_requests:
-            user_in_flight_requests[user_id] = False
+        if user_id not in runtime_state.user_turn_counters:
+            runtime_state.user_turn_counters[user_id] = 0
+        if user_id not in runtime_state.user_next_turn_to_finalize:
+            runtime_state.user_next_turn_to_finalize[user_id] = 1
+        if user_id not in runtime_state.user_in_flight_requests:
+            runtime_state.user_in_flight_requests[user_id] = False
 
-        if user_in_flight_requests[user_id]:
+        if runtime_state.user_in_flight_requests[user_id]:
             logger.info(
                 f"request_rejected_inflight request_id={request_id} "
                 f"user_id={user_id} chat_id={chat_id}"
@@ -805,12 +822,12 @@ async def _prepare_message_request_state(
             )
             return None
 
-        user_in_flight_requests[user_id] = True
+        runtime_state.user_in_flight_requests[user_id] = True
 
         old_history = history[:]
         reset_token = get_session_reset_token(user_id, active_session)
-        user_turn_counters[user_id] += 1
-        turn_id = user_turn_counters[user_id]
+        runtime_state.user_turn_counters[user_id] += 1
+        turn_id = runtime_state.user_turn_counters[user_id]
         new_history = old_history + [f"User: {user_text}"]
         new_history = new_history[-MAX_HISTORY:]
         selected_model = get_user_selected_model(user_id)
@@ -821,11 +838,11 @@ async def _prepare_message_request_state(
         payload = build_gateway_payload(prompt, selected_model)
     except Exception:
         async with lock:
-            user_in_flight_requests[user_id] = False
+            runtime_state.user_in_flight_requests[user_id] = False
         finalize_condition = get_user_finalize_condition(user_id)
         async with finalize_condition:
-            if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                user_next_turn_to_finalize[user_id] = turn_id + 1
+            if runtime_state.user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
                 finalize_condition.notify_all()
         raise
 
@@ -992,7 +1009,7 @@ async def _finalize_message_turn(
     # Reacquire the shared per-user lock only for finalization ordering and history
     # mutation. Turn numbers still serialize this section to preserve ordering.
     async with finalize_condition:
-        while user_next_turn_to_finalize.get(user_id, 1) != turn_id:
+        while runtime_state.user_next_turn_to_finalize.get(user_id, 1) != turn_id:
             await finalize_condition.wait()
 
         try:
@@ -1015,7 +1032,7 @@ async def _finalize_message_turn(
             ensure_user_sessions(user_id)[active_session] = updated_history[-MAX_HISTORY:]
             save_bot_state()
         finally:
-            user_next_turn_to_finalize[user_id] = turn_id + 1
+            runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
             finalize_condition.notify_all()
 
 
@@ -1045,8 +1062,8 @@ async def _create_waiting_message(
         if advance_finalize_on_failure and user_id is not None and turn_id is not None:
             finalize_condition = get_user_finalize_condition(user_id)
             async with finalize_condition:
-                if user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                    user_next_turn_to_finalize[user_id] = turn_id + 1
+                if runtime_state.user_next_turn_to_finalize.get(user_id, 1) == turn_id:
+                    runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
                     finalize_condition.notify_all()
 
         return None
@@ -1262,7 +1279,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     finally:
         async with lock:
-            user_in_flight_requests[user_id] = False
+            runtime_state.user_in_flight_requests[user_id] = False
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1278,10 +1295,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lock = get_user_lock(user_id)
     async with lock:
-        if user_id not in user_in_flight_requests:
-            user_in_flight_requests[user_id] = False
+        if user_id not in runtime_state.user_in_flight_requests:
+            runtime_state.user_in_flight_requests[user_id] = False
 
-        if user_in_flight_requests[user_id]:
+        if runtime_state.user_in_flight_requests[user_id]:
             logger.info(
                 "document_request_rejected_inflight request_id=%s user_id=%s chat_id=%s",
                 request_id,
@@ -1293,7 +1310,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        user_in_flight_requests[user_id] = True
+        runtime_state.user_in_flight_requests[user_id] = True
 
     try:
         file_name = document.file_name or "unknown"
@@ -1382,7 +1399,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     finally:
         async with lock:
-            user_in_flight_requests[user_id] = False
+            runtime_state.user_in_flight_requests[user_id] = False
 
 
 async def init_http_client(app):
