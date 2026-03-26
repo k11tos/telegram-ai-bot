@@ -1045,6 +1045,22 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.user_document_summary_modes[123] == "bullets"
 
 
+def test_load_bot_state_normalizes_invalid_document_mode_to_default(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"document_summary_modes":{"7":"UNKNOWN_MODE"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.user_document_summary_modes[7] == "summary"
+    assert bot.get_user_document_summary_mode(7) == "summary"
+
+
 def test_load_bot_state_ignores_malformed_json(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)

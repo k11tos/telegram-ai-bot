@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Callable
 
+from document_summary import normalize_document_summary_mode
+
 
 def _normalize_int_key_mapping(source: dict) -> dict[int, object]:
     normalized: dict[int, object] = {}
@@ -161,7 +163,10 @@ def load_bot_state(
                     for user_id, raw_mode in normalized_document_summary_modes.items():
                         if not isinstance(raw_mode, str):
                             continue
-                        normalized_mode = raw_mode.strip().lower()
+                        stripped_mode = raw_mode.strip()
+                        if not stripped_mode:
+                            continue
+                        normalized_mode = normalize_document_summary_mode(stripped_mode)
                         if normalized_mode:
                             loaded_document_summary_modes[user_id] = normalized_mode
 
