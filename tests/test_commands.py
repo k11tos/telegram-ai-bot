@@ -585,6 +585,51 @@ def test_preset_command_shows_gateway_loaded_descriptions(make_update_context):
     assert "should not be shown" not in update.message.replies[-1]
 
 
+def test_docmode_command_shows_default_mode(make_update_context):
+    update, context = make_update_context(text="/docmode", client=None)
+
+    asyncio.run(bot.docmode_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "현재 문서 요약 모드: summary\n"
+        "사용 가능: summary, bullets, action, code\n"
+        "예시: /docmode bullets"
+    )
+
+
+def test_docmode_command_switches_mode(make_update_context):
+    user_id = 903
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/docmode action",
+        client=None,
+        args=["action"],
+    )
+
+    asyncio.run(bot.docmode_command(update, context))
+
+    assert bot.user_document_summary_modes[user_id] == "action"
+    assert update.message.replies[-1] == "문서 요약 모드가 변경되었습니다: action"
+
+
+def test_docmode_command_rejects_invalid_mode(make_update_context):
+    user_id = 904
+    update, context = make_update_context(
+        user_id=user_id,
+        text="/docmode unknown",
+        client=None,
+        args=["unknown"],
+    )
+
+    asyncio.run(bot.docmode_command(update, context))
+
+    assert bot.user_document_summary_modes.get(user_id) is None
+    assert update.message.replies[-1] == (
+        "지원하지 않는 문서 요약 모드입니다. "
+        "사용 가능: summary, bullets, action, code"
+    )
+
+
 def test_ctx_command_shows_default_state(make_update_context):
     update, context = make_update_context(text="/ctx", client=None)
 
@@ -971,6 +1016,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     bot.ensure_user_sessions(10)[bot.DEFAULT_SESSION_NAME] = ["User: hi", "AI: hello"]
     bot.user_selected_models[10] = "gpt-4o-mini"
     bot.user_selected_presets[10] = "coder"
+    bot.user_document_summary_modes[10] = "bullets"
 
     bot.save_bot_state()
 
@@ -980,6 +1026,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     assert '"conversations":{"10":{"default":["User: hi","AI: hello"]}}' in payload
     assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
     assert '"selected_presets":{"10":"coder"}' in payload
+    assert '"selected_document_modes":{"10":"bullets"}' in payload
 
 
 def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
@@ -988,7 +1035,8 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     state_path = state_dir / "bot_state.json"
     state_path.write_text(
         '{"version":1,"conversations":{"123":{"default":["User: a","AI: b"]}},"active_sessions":{"123":"default"},'
-        '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"}}',
+        '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"},'
+        '"selected_document_modes":{"123":"ACTION"}}',
         encoding="utf-8",
     )
     monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
@@ -999,6 +1047,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.get_session_history(123) == ["User: a", "AI: b"]
     assert bot.user_selected_models[123] == "gpt-4o-mini"
     assert bot.user_selected_presets[123] == "english"
+    assert bot.user_document_summary_modes[123] == "action"
 
 
 def test_load_bot_state_ignores_malformed_json(tmp_path, monkeypatch):

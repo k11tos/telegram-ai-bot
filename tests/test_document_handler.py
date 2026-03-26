@@ -118,7 +118,25 @@ def test_handle_document_summarizes_supported_file(make_update_context):
     assert len(update.message.replies) == 1
     assert len(client.post_calls) == 1
     assert client.post_calls[0]["path"] == bot.AI_GATEWAY_CHAT_PATH
-    assert "한국어로 간결하게 요약" in client.post_calls[0]["json"]["prompt"]
+    assert "- 요약 모드: summary" in client.post_calls[0]["json"]["prompt"]
+
+
+def test_handle_document_uses_selected_docmode_in_prompt(make_update_context):
+    user_id = 777
+    bot.user_document_summary_modes[user_id] = "action"
+    client = FakeClient(post_payload={"response": "- 실행 항목"})
+    update, context = make_document_update_context(
+        make_update_context,
+        file_name="plan.md",
+        file_size=30,
+        content="할 일 정리".encode("utf-8"),
+        client=client,
+    )
+    update.effective_user.id = user_id
+
+    asyncio.run(bot.handle_document(update, context))
+
+    assert "- 요약 모드: action" in client.post_calls[0]["json"]["prompt"]
 
 
 
