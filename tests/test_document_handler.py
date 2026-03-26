@@ -118,7 +118,7 @@ def test_handle_document_summarizes_supported_file(make_update_context):
     assert len(update.message.replies) == 1
     assert len(client.post_calls) == 1
     assert client.post_calls[0]["path"] == bot.AI_GATEWAY_CHAT_PATH
-    assert "한국어로 간결하게 요약" in client.post_calls[0]["json"]["prompt"]
+    assert "요약 모드: summary" in client.post_calls[0]["json"]["prompt"]
 
 
 
@@ -212,6 +212,39 @@ def test_handle_document_truncates_prompt_content(make_update_context):
     prompt = client.post_calls[0]["json"]["prompt"]
     assert ("가" * bot.MAX_DOCUMENT_PROMPT_CHARS) in prompt
     assert ("가" * (bot.MAX_DOCUMENT_PROMPT_CHARS + 1)) not in prompt
+
+
+def test_handle_document_uses_user_selected_document_mode(make_update_context):
+    client = FakeClient(post_payload={"response": "요약"})
+    user_id = 321
+    bot.user_document_summary_modes[user_id] = "bullets"
+    update, context = make_document_update_context(
+        make_update_context,
+        file_name="readme.md",
+        file_size=30,
+        content="테스트 문서 내용".encode("utf-8"),
+        client=client,
+    )
+    update.effective_user.id = user_id
+
+    asyncio.run(bot.handle_document(update, context))
+
+    prompt = client.post_calls[0]["json"]["prompt"]
+    assert "요약 모드: bullets" in prompt
+
+
+def test_build_document_summary_prompt_changes_by_mode():
+    summary_prompt = bot.build_document_summary_prompt("notes.txt", "본문", mode="summary")
+    bullet_prompt = bot.build_document_summary_prompt("notes.txt", "본문", mode="bullets")
+    action_prompt = bot.build_document_summary_prompt("notes.txt", "본문", mode="action")
+    code_prompt = bot.build_document_summary_prompt("notes.txt", "본문", mode="code")
+
+    assert "요약 모드: summary" in summary_prompt
+    assert "요약 모드: bullets" in bullet_prompt
+    assert "요약 모드: action" in action_prompt
+    assert "요약 모드: code" in code_prompt
+    assert summary_prompt != bullet_prompt
+    assert action_prompt != code_prompt
 
 
 def test_handle_document_rejects_inflight_requests_same_user(make_update_context):

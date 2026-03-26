@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Callable
 
+from document_summary import normalize_document_summary_mode
+
 
 def _normalize_int_key_mapping(source: dict) -> dict[int, object]:
     normalized: dict[int, object] = {}
@@ -19,6 +21,7 @@ def build_state_payload(
     user_active_sessions: dict,
     user_selected_models: dict,
     user_selected_presets: dict,
+    user_document_summary_modes: dict,
 ) -> dict[str, object]:
     serialized_conversations: dict[str, dict[str, list[str]]] = {}
     for user_id, per_session in conversations.items():
@@ -44,6 +47,9 @@ def build_state_payload(
         "selected_presets": {
             str(user_id): preset for user_id, preset in user_selected_presets.items()
         },
+        "document_summary_modes": {
+            str(user_id): mode for user_id, mode in user_document_summary_modes.items()
+        },
     }
 
 
@@ -54,6 +60,7 @@ def save_bot_state(
     user_active_sessions: dict,
     user_selected_models: dict,
     user_selected_presets: dict,
+    user_document_summary_modes: dict,
     logger: logging.Logger,
 ) -> None:
     try:
@@ -63,6 +70,7 @@ def save_bot_state(
             user_active_sessions,
             user_selected_models,
             user_selected_presets,
+            user_document_summary_modes,
         )
         temp_path = f"{state_file_path}.tmp"
         with open(temp_path, "w", encoding="utf-8") as state_file:
@@ -83,6 +91,7 @@ def load_bot_state(
     loaded_active_sessions: dict[int, str] = {}
     loaded_models: dict[int, str] = {}
     loaded_presets: dict[int, str] = {}
+    loaded_document_summary_modes: dict[int, str] = {}
 
     if not os.path.exists(state_file_path):
         logger.info("state_file_missing path=%s", state_file_path)
@@ -146,9 +155,25 @@ def load_bot_state(
                         if normalized_preset:
                             loaded_presets[user_id] = normalized_preset
 
+                raw_document_summary_modes = payload.get("document_summary_modes", {})
+                if isinstance(raw_document_summary_modes, dict):
+                    normalized_document_summary_modes = _normalize_int_key_mapping(
+                        raw_document_summary_modes
+                    )
+                    for user_id, raw_mode in normalized_document_summary_modes.items():
+                        if not isinstance(raw_mode, str):
+                            continue
+                        stripped_mode = raw_mode.strip()
+                        if not stripped_mode:
+                            continue
+                        normalized_mode = normalize_document_summary_mode(stripped_mode)
+                        if normalized_mode:
+                            loaded_document_summary_modes[user_id] = normalized_mode
+
     return {
         "conversations": loaded_conversations,
         "active_sessions": loaded_active_sessions,
         "selected_models": loaded_models,
         "selected_presets": loaded_presets,
+        "document_summary_modes": loaded_document_summary_modes,
     }

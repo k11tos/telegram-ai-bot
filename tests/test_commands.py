@@ -38,6 +38,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/health" in reply
     assert "/brain" in reply
     assert "/session" in reply
+    assert "/docmode" in reply
 
 
 def test_build_version_message_includes_app_and_commit(monkeypatch):
@@ -139,6 +140,45 @@ def test_help_command_includes_session_clear_command(make_update_context):
 
     reply = update.message.replies[0]
     assert "/session_clear" in reply
+
+
+def test_docmode_command_shows_default_mode_when_unset(make_update_context):
+    user_id = 900
+    update, context = make_update_context(user_id=user_id, text="/docmode", client=None, args=[])
+
+    asyncio.run(bot.docmode_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "현재 문서 요약 모드: summary\n"
+        f"사용 가능: {bot.DOCUMENT_SUMMARY_MODES_TEXT}"
+    )
+
+
+def test_docmode_command_switches_mode(make_update_context):
+    user_id = 901
+    update, context = make_update_context(
+        user_id=user_id, text="/docmode bullets", client=None, args=["bullets"]
+    )
+
+    asyncio.run(bot.docmode_command(update, context))
+
+    assert bot.user_document_summary_modes[user_id] == "bullets"
+    assert update.message.replies[-1] == "문서 요약 모드가 변경되었습니다: bullets"
+
+
+def test_docmode_command_handles_invalid_mode(make_update_context):
+    user_id = 902
+    update, context = make_update_context(
+        user_id=user_id, text="/docmode unknown", client=None, args=["unknown"]
+    )
+
+    asyncio.run(bot.docmode_command(update, context))
+
+    assert user_id not in bot.user_document_summary_modes
+    assert update.message.replies[-1] == (
+        "지원하지 않는 문서 요약 모드입니다. "
+        f"사용 가능: {bot.DOCUMENT_SUMMARY_MODES_TEXT}"
+    )
 
 
 
@@ -971,6 +1011,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     bot.ensure_user_sessions(10)[bot.DEFAULT_SESSION_NAME] = ["User: hi", "AI: hello"]
     bot.user_selected_models[10] = "gpt-4o-mini"
     bot.user_selected_presets[10] = "coder"
+    bot.user_document_summary_modes[10] = "action"
 
     bot.save_bot_state()
 
@@ -980,6 +1021,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     assert '"conversations":{"10":{"default":["User: hi","AI: hello"]}}' in payload
     assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
     assert '"selected_presets":{"10":"coder"}' in payload
+    assert '"document_summary_modes":{"10":"action"}' in payload
 
 
 def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
@@ -988,7 +1030,8 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     state_path = state_dir / "bot_state.json"
     state_path.write_text(
         '{"version":1,"conversations":{"123":{"default":["User: a","AI: b"]}},"active_sessions":{"123":"default"},'
-        '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"}}',
+        '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"},'
+        '"document_summary_modes":{"123":"BULLETS"}}',
         encoding="utf-8",
     )
     monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
@@ -999,6 +1042,23 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.get_session_history(123) == ["User: a", "AI: b"]
     assert bot.user_selected_models[123] == "gpt-4o-mini"
     assert bot.user_selected_presets[123] == "english"
+    assert bot.user_document_summary_modes[123] == "bullets"
+
+
+def test_load_bot_state_normalizes_invalid_document_mode_to_default(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "bot_state.json"
+    state_path.write_text(
+        '{"document_summary_modes":{"7":"UNKNOWN_MODE"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
+
+    bot.load_bot_state()
+
+    assert bot.user_document_summary_modes[7] == "summary"
+    assert bot.get_user_document_summary_mode(7) == "summary"
 
 
 def test_load_bot_state_ignores_malformed_json(tmp_path, monkeypatch):
