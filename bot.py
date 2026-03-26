@@ -805,7 +805,7 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"현재 프리셋: {active_preset}")
 
 
-async def _prepare_message_request_state(
+async def _begin_message_turn_with_inflight_guard(
     user_id: int,
     user_text: str,
     presets: dict[str, dict[str, str]],
@@ -814,6 +814,9 @@ async def _prepare_message_request_state(
     chat_id: int | None,
     update: Update,
 ) -> dict[str, object] | None:
+    # This reserves the user's single in-flight slot for the whole turn.
+    # We still keep the lock narrow to shared-state bookkeeping, but later
+    # messages from the same user are rejected until this turn finalizes.
     async with lock:
         active_session = get_active_session_name(user_id)
         history = get_session_history(user_id, active_session)
@@ -1206,10 +1209,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     presets = get_presets_from_bot_data(context.application.bot_data)
     lock = get_user_lock(user_id)
-    # Keep the per-user lock scope minimal: only protect shared state reads/writes
-    # needed to prepare this turn. The potentially slow AI call runs without holding
-    # the lock so later messages from the same user can start in parallel.
-    request_state = await _prepare_message_request_state(
+    # Keep the lock scope minimal while reserving one in-flight request per user.
+    # The network call runs outside the lock, but concurrent messages are still
+    # rejected until the current turn clears user_in_flight_requests.
+    request_state = await _begin_message_turn_with_inflight_guard(
         user_id=user_id,
         user_text=user_text,
         presets=presets,
