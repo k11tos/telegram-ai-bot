@@ -199,6 +199,7 @@ MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
+    "/ctx - 현재 사용자 컨텍스트 요약",
     "/model - 현재 적용 중인 모델 확인",
     "/preset [name] - 현재 프리셋 확인 또는 변경",
     "/reload_presets - 게이트웨이 프리셋 다시 불러오기",
@@ -803,6 +804,35 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     active_preset = resolve_active_preset(user_id, presets)
     await update.message.reply_text(f"현재 프리셋: {active_preset}")
+
+
+def build_ctx_message(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str:
+    available_presets = (
+        presets if presets is not None else get_presets_from_bot_data(None)
+    )
+    active_session = get_active_session_name(user_id)
+    selected_model = get_user_selected_model(user_id) or "기본 모델 사용"
+    active_preset = resolve_active_preset(user_id, available_presets)
+    history_line_count = len(get_session_history(user_id, active_session))
+    in_flight = runtime_state.user_in_flight_requests.get(user_id, False)
+    in_flight_text = "있음" if in_flight else "없음"
+
+    return "\n".join(
+        [
+            "현재 컨텍스트",
+            f"- 세션: {active_session}",
+            f"- 모델: {selected_model}",
+            f"- 프리셋: {active_preset}",
+            f"- 기록 줄 수: {history_line_count}",
+            f"- 요청 처리 중: {in_flight_text}",
+        ]
+    )
+
+
+async def ctx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    presets = get_presets_from_bot_data(context.application.bot_data)
+    await update.message.reply_text(build_ctx_message(user_id, presets))
 
 
 async def _begin_message_turn_with_inflight_guard(
@@ -1497,6 +1527,7 @@ def main():
     )
 
     register_operational_handlers(app)
+    app.add_handler(CommandHandler("ctx", ctx_command))
     app.add_handler(CommandHandler("model", model_command))
     app.add_handler(CommandHandler("preset", preset_command))
     app.add_handler(CommandHandler("session", session_command))
