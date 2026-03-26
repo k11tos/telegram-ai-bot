@@ -114,6 +114,15 @@ def test_help_command_includes_models_command(make_update_context):
     assert "/models" in reply
 
 
+def test_help_command_includes_ctx_command(make_update_context):
+    update, context = make_update_context(text="/help", client=None)
+
+    asyncio.run(bot.help_command(update, context))
+
+    reply = update.message.replies[0]
+    assert "/ctx" in reply
+
+
 def test_help_command_includes_session_rename_command(make_update_context):
     update, context = make_update_context(text="/help", client=None)
 
@@ -530,6 +539,73 @@ def test_preset_command_normalizes_selected_preset_value(make_update_context):
     assert update.message.replies[-1] == "현재 프리셋: coder"
 
 
+def test_ctx_command_shows_default_state(make_update_context):
+    update, context = make_update_context(text="/ctx", client=None)
+
+    asyncio.run(bot.ctx_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "현재 컨텍스트\n"
+        "- 세션: default\n"
+        "- 모델: 기본 모델 사용\n"
+        "- 프리셋: normal\n"
+        "- 기록 줄 수: 0\n"
+        "- 요청 처리 중: 없음"
+    )
+
+
+def test_ctx_command_shows_custom_selected_model(make_update_context):
+    user_id = 501
+    bot.user_selected_models[user_id] = "gpt-4o-mini"
+    update, context = make_update_context(user_id=user_id, text="/ctx", client=None)
+
+    asyncio.run(bot.ctx_command(update, context))
+
+    assert "- 모델: gpt-4o-mini" in update.message.replies[-1]
+
+
+def test_ctx_command_shows_custom_selected_preset(make_update_context):
+    user_id = 502
+    bot.user_selected_presets[user_id] = "coder"
+    update, context = make_update_context(user_id=user_id, text="/ctx", client=None)
+
+    asyncio.run(bot.ctx_command(update, context))
+
+    assert "- 프리셋: coder" in update.message.replies[-1]
+
+
+def test_ctx_command_shows_non_default_active_session(make_update_context):
+    user_id = 503
+    bot.user_active_sessions[user_id] = "work"
+    bot.ensure_user_sessions(user_id)["work"] = ["User: hi", "AI: hello", "User: next"]
+    update, context = make_update_context(user_id=user_id, text="/ctx", client=None)
+
+    asyncio.run(bot.ctx_command(update, context))
+
+    assert "- 세션: work" in update.message.replies[-1]
+    assert "- 기록 줄 수: 3" in update.message.replies[-1]
+
+
+def test_ctx_command_shows_inflight_false(make_update_context):
+    user_id = 504
+    bot.user_in_flight_requests[user_id] = False
+    update, context = make_update_context(user_id=user_id, text="/ctx", client=None)
+
+    asyncio.run(bot.ctx_command(update, context))
+
+    assert "- 요청 처리 중: 없음" in update.message.replies[-1]
+
+
+def test_ctx_command_shows_inflight_true(make_update_context):
+    user_id = 505
+    bot.user_in_flight_requests[user_id] = True
+    update, context = make_update_context(user_id=user_id, text="/ctx", client=None)
+
+    asyncio.run(bot.ctx_command(update, context))
+
+    assert "- 요청 처리 중: 있음" in update.message.replies[-1]
+
+
 def test_reload_presets_command_updates_presets_from_gateway(make_update_context):
     client = FakeModelsClient(
         payload={
@@ -788,6 +864,55 @@ def test_main_registers_health_command_handler(monkeypatch):
     ]
     assert len(health_handlers) == 1
     assert health_handlers[0].callback == bot.health_command
+    assert fake_builder.app.run_polling_called is True
+
+
+def test_main_registers_ctx_command_handler(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.handlers = []
+            self.run_polling_called = False
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+        def run_polling(self):
+            self.run_polling_called = True
+
+    class FakeBuilder:
+        def __init__(self):
+            self.app = FakeApp()
+
+        def token(self, value):
+            self.token_value = value
+            return self
+
+        def post_init(self, callback):
+            self.post_init_callback = callback
+            return self
+
+        def post_shutdown(self, callback):
+            self.post_shutdown_callback = callback
+            return self
+
+        def build(self):
+            return self.app
+
+    fake_builder = FakeBuilder()
+
+    monkeypatch.setattr(bot, "BOT_TOKEN", "dummy-token")
+    monkeypatch.setattr(bot, "AI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setattr(bot, "ApplicationBuilder", lambda: fake_builder)
+
+    bot.main()
+
+    ctx_handlers = [
+        handler
+        for handler in fake_builder.app.handlers
+        if "ctx" in getattr(handler, "commands", set())
+    ]
+    assert len(ctx_handlers) == 1
+    assert ctx_handlers[0].callback == bot.ctx_command
     assert fake_builder.app.run_polling_called is True
 
 
