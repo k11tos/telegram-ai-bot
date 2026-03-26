@@ -773,28 +773,46 @@ def test_preset_prefix_and_description_values_match_gateway_contract():
     }
 
 
-def test_build_prompt_with_preset_starts_with_coder_prefix():
-    prompt = bot.build_prompt_with_preset(["User: hi"], "coder")
+def test_build_gateway_payload_forwards_selected_model_and_preset_without_prompt_mutation():
+    prompt = "User: 이전 질문\nAI: 이전 답변\nUser: 이번 질문\nAI:"
 
-    assert prompt.startswith(f"{bot.STATIC_PRESET_DEFINITIONS['coder']['prompt_prefix']}")
+    payload = bot.build_gateway_payload(
+        prompt,
+        selected_model="gpt-4o-mini",
+        selected_preset="coder",
+    )
 
-
-def test_build_prompt_with_preset_starts_with_english_prefix():
-    prompt = bot.build_prompt_with_preset(["User: hi"], "english")
-
-    assert prompt.startswith(f"{bot.STATIC_PRESET_DEFINITIONS['english']['prompt_prefix']}")
-
-
-def test_build_prompt_with_preset_starts_with_quant_prefix():
-    prompt = bot.build_prompt_with_preset(["User: hi"], "quant")
-
-    assert prompt.startswith(f"{bot.STATIC_PRESET_DEFINITIONS['quant']['prompt_prefix']}")
+    assert payload == {
+        "prompt": prompt,
+        "model": "gpt-4o-mini",
+        "preset": "coder",
+    }
 
 
-def test_build_prompt_with_normal_preset_keeps_existing_prompt_format():
-    prompt = bot.build_prompt_with_preset(["User: hi"], "normal")
+@pytest.mark.parametrize("selected_preset", ["coder", "english", "quant"])
+def test_non_default_presets_are_forwarded_without_local_prefix_injection(
+    make_update_context, selected_preset
+):
+    user_id = 806
+    bot.user_selected_presets[user_id] = selected_preset
+    bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = [
+        "User: 이전 질문",
+        "AI: 이전 답변",
+    ]
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '프리셋 응답'})}",
+            "data: [DONE]",
+        ]
+    )
 
-    assert prompt == "User: hi\nAI:"
+    update, context = make_update_context(user_id=user_id, text="후속 질문", client=client)
+    asyncio.run(bot.handle_message(update, context))
+
+    payload = client.stream_calls[0]["json"]
+    assert payload["prompt"] == "User: 이전 질문\nAI: 이전 답변\nUser: 후속 질문\nAI:"
+    assert payload["preset"] == selected_preset
+    assert bot.STATIC_PRESET_DEFINITIONS[selected_preset]["prompt_prefix"] not in payload["prompt"]
 
 
 def test_handle_message_forwards_active_preset_in_gateway_payload(make_update_context):
