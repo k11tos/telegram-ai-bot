@@ -33,9 +33,12 @@ from commands.ops import (
 )
 from commands.sessions import SessionCommandDependencies, build_session_handlers
 from document_summary import (
+    DEFAULT_DOCUMENT_SUMMARY_MODE,
     DocumentValidationError,
+    SUPPORTED_DOCUMENT_SUMMARY_MODES,
     build_document_summary_prompt as build_document_summary_prompt_helper,
     is_supported_document as is_supported_document_helper,
+    normalize_document_summary_mode as normalize_document_summary_mode_helper,
     summarize_document_text,
 )
 from gateway_client import (
@@ -133,6 +136,7 @@ class RuntimeState:
     user_in_flight_requests: dict[int, bool] = field(default_factory=dict)
     user_selected_models: dict[int, str] = field(default_factory=dict)
     user_selected_presets: dict[int, str] = field(default_factory=dict)
+    user_document_summary_modes: dict[int, str] = field(default_factory=dict)
 
 
 runtime_state = RuntimeState()
@@ -148,6 +152,7 @@ user_finalize_conditions = runtime_state.user_finalize_conditions
 user_in_flight_requests = runtime_state.user_in_flight_requests
 user_selected_models = runtime_state.user_selected_models
 user_selected_presets = runtime_state.user_selected_presets
+user_document_summary_modes = runtime_state.user_document_summary_modes
 MODEL_RESET_ALIASES = {"default", "reset"}
 
 LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
@@ -196,6 +201,7 @@ SUPPORTED_DOCUMENT_EXTENSIONS = (
 SUPPORTED_DOCUMENT_EXTENSIONS_TEXT = ", ".join(SUPPORTED_DOCUMENT_EXTENSIONS)
 MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
+DOCUMENT_SUMMARY_MODES_TEXT = ", ".join(SUPPORTED_DOCUMENT_SUMMARY_MODES)
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
@@ -211,6 +217,7 @@ HELP_LINES = [
     "/session_clear <name> - 세션 기록만 비우기",
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
+    "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -227,6 +234,7 @@ def build_state_payload() -> dict[str, object]:
         runtime_state.user_active_sessions,
         runtime_state.user_selected_models,
         runtime_state.user_selected_presets,
+        runtime_state.user_document_summary_modes,
     )
 
 
@@ -238,6 +246,7 @@ def save_bot_state() -> None:
         runtime_state.user_active_sessions,
         runtime_state.user_selected_models,
         runtime_state.user_selected_presets,
+        runtime_state.user_document_summary_modes,
         logger,
     )
 
@@ -265,6 +274,8 @@ def load_bot_state() -> None:
     runtime_state.user_selected_models.update(loaded_state["selected_models"])
     runtime_state.user_selected_presets.clear()
     runtime_state.user_selected_presets.update(loaded_state["selected_presets"])
+    runtime_state.user_document_summary_modes.clear()
+    runtime_state.user_document_summary_modes.update(loaded_state["document_summary_modes"])
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
@@ -689,8 +700,43 @@ def build_supported_document_filter():
     return merged_filter
 
 
-def build_document_summary_prompt(file_name: str, content: str) -> str:
-    return build_document_summary_prompt_helper(file_name, content)
+def build_document_summary_prompt(file_name: str, content: str, mode: str | None = None) -> str:
+    return build_document_summary_prompt_helper(file_name, content, mode=mode)
+
+
+def normalize_document_summary_mode(mode: str | None) -> str:
+    return normalize_document_summary_mode_helper(mode)
+
+
+def get_user_document_summary_mode(user_id: int) -> str:
+    selected_mode = runtime_state.user_document_summary_modes.get(user_id)
+    return normalize_document_summary_mode(selected_mode)
+
+
+async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    requested_mode = " ".join(context.args).strip().lower() if context.args else ""
+
+    if not requested_mode:
+        current_mode = get_user_document_summary_mode(user_id)
+        await update.message.reply_text(
+            f"현재 문서 요약 모드: {current_mode}\n"
+            f"사용 가능: {DOCUMENT_SUMMARY_MODES_TEXT}"
+        )
+        return
+
+    if requested_mode not in SUPPORTED_DOCUMENT_SUMMARY_MODES:
+        await update.message.reply_text(
+            "지원하지 않는 문서 요약 모드입니다. "
+            f"사용 가능: {DOCUMENT_SUMMARY_MODES_TEXT}"
+        )
+        return
+
+    lock = get_user_lock(user_id)
+    async with lock:
+        runtime_state.user_document_summary_modes[user_id] = requested_mode
+        request_state_save("docmode_change")
+    await update.message.reply_text(f"문서 요약 모드가 변경되었습니다: {requested_mode}")
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1422,6 +1468,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_path=AI_GATEWAY_CHAT_PATH,
                 max_document_bytes=MAX_DOCUMENT_BYTES,
                 max_document_prompt_chars=MAX_DOCUMENT_PROMPT_CHARS,
+                mode=get_user_document_summary_mode(user_id),
             )
             try:
                 await _send_chunked_message_via_waiting_message(
@@ -1553,6 +1600,7 @@ def main():
     app.add_handler(CommandHandler("session_clear", session_clear_command))
     app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
+    app.add_handler(CommandHandler("docmode", docmode_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(build_supported_document_filter(), handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
