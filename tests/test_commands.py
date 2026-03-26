@@ -459,7 +459,16 @@ def test_preset_command_shows_default_when_unset(make_update_context):
 
     asyncio.run(bot.preset_command(update, context))
 
-    assert update.message.replies[-1] == "현재 프리셋: normal"
+    static_presets = bot.get_static_presets()
+    assert update.message.replies[-1] == (
+        f"현재 프리셋: normal\n"
+        f"사용 가능: {', '.join(static_presets.keys())}\n"
+        "설명:\n"
+        f"✅ normal: {static_presets['normal']['description']}\n"
+        f"• coder: {static_presets['coder']['description']}\n"
+        f"• english: {static_presets['english']['description']}\n"
+        f"• quant: {static_presets['quant']['description']}"
+    )
 
 
 def test_preset_command_sets_supported_preset(make_update_context):
@@ -516,7 +525,16 @@ def test_preset_command_shows_selected_preset(make_update_context):
 
     asyncio.run(bot.preset_command(update, context))
 
-    assert update.message.replies[-1] == "현재 프리셋: coder"
+    static_presets = bot.get_static_presets()
+    assert update.message.replies[-1] == (
+        f"현재 프리셋: coder\n"
+        f"사용 가능: {', '.join(static_presets.keys())}\n"
+        "설명:\n"
+        f"• normal: {static_presets['normal']['description']}\n"
+        f"✅ coder: {static_presets['coder']['description']}\n"
+        f"• english: {static_presets['english']['description']}\n"
+        f"• quant: {static_presets['quant']['description']}"
+    )
 
 
 def test_preset_command_falls_back_to_default_for_invalid_value(make_update_context):
@@ -526,7 +544,7 @@ def test_preset_command_falls_back_to_default_for_invalid_value(make_update_cont
 
     asyncio.run(bot.preset_command(update, context))
 
-    assert update.message.replies[-1] == "현재 프리셋: normal"
+    assert update.message.replies[-1].startswith("현재 프리셋: normal\n")
 
 
 def test_preset_command_normalizes_selected_preset_value(make_update_context):
@@ -536,7 +554,35 @@ def test_preset_command_normalizes_selected_preset_value(make_update_context):
 
     asyncio.run(bot.preset_command(update, context))
 
-    assert update.message.replies[-1] == "현재 프리셋: coder"
+    assert update.message.replies[-1].startswith("현재 프리셋: coder\n")
+
+
+def test_preset_command_shows_gateway_loaded_descriptions(make_update_context):
+    bot_data = {
+        bot.PRESETS_KEY: {
+            "normal": {
+                "description": "게이트웨이 기본",
+                "prompt_prefix": "should not be shown",
+            },
+            "research": {
+                "description": "자료 조사와 검증 중심",
+                "prompt_prefix": "should not be shown",
+            },
+        }
+    }
+    update, context = make_update_context(text="/preset", client=None)
+    context.application.bot_data = bot_data
+
+    asyncio.run(bot.preset_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "현재 프리셋: normal\n"
+        "사용 가능: normal, research\n"
+        "설명:\n"
+        "✅ normal: 게이트웨이 기본\n"
+        "• research: 자료 조사와 검증 중심"
+    )
+    assert "should not be shown" not in update.message.replies[-1]
 
 
 def test_ctx_command_shows_default_state(make_update_context):

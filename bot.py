@@ -201,7 +201,7 @@ HELP_LINES = [
     "/help - 명령어 안내",
     "/ctx - 현재 사용자 컨텍스트 요약",
     "/model - 현재 적용 중인 모델 확인",
-    "/preset [name] - 현재 프리셋 확인 또는 변경",
+    "/preset [name] - 현재 프리셋 확인, 목록 보기 또는 변경",
     "/reload_presets - 게이트웨이 프리셋 다시 불러오기",
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
@@ -803,7 +803,25 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     active_preset = resolve_active_preset(user_id, presets)
-    await update.message.reply_text(f"현재 프리셋: {active_preset}")
+    await update.message.reply_text(build_preset_overview_message(active_preset, presets))
+
+
+def build_preset_overview_message(
+    active_preset: str,
+    presets: dict[str, dict[str, str]],
+) -> str:
+    preset_names = ", ".join(presets.keys())
+    lines = [
+        f"현재 프리셋: {active_preset}",
+        f"사용 가능: {preset_names}",
+        "설명:",
+    ]
+    for preset_name, preset_definition in presets.items():
+        marker = "✅" if preset_name == active_preset else "•"
+        description = preset_definition.get(PRESET_DESCRIPTION_FIELD, "").strip()
+        description_text = description if description else "설명 없음"
+        lines.append(f"{marker} {preset_name}: {description_text}")
+    return "\n".join(lines)
 
 
 def build_ctx_message(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str:
