@@ -86,6 +86,9 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
     has_metric_fallback = False
 
     for change in changes:
+        if not isinstance(change, dict) or change.get("notable") is not True:
+            continue
+
         change_type = _get_change_type(change)
         if not change_type:
             continue

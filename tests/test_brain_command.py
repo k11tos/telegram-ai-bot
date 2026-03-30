@@ -183,6 +183,7 @@ def test_brain_command_shows_service_state_change_fallback_line_when_incomplete(
                     "type": "service_state_change",
                     "service": "worker",
                     "from_state": "degraded",
+                    "notable": True,
                 }
             ],
         }
@@ -339,11 +340,11 @@ def test_brain_command_deduplicates_metric_changes_for_compact_output(
             "message_lines": ["일부 점검 필요"],
             "has_notable_changes": True,
             "changes": [
-                {"kind": "metric_delta", "field": "load_average", "previous": 0.7, "current": 1.5},
-                {"kind": "metric_delta", "field": "load_average", "previous": 0.7, "current": 1.5},
-                {"kind": "metric_delta", "field": "memory_percent", "previous": 61.0, "current": 72.0},
-                {"kind": "metric_delta", "field": "memory_percent", "previous": 61.0, "current": 72.0},
-                {"kind": "metric_delta", "field": "disk_percent", "previous": 68.4, "current": 79.6},
+                {"kind": "metric_delta", "field": "load_average", "previous": 0.7, "current": 1.5, "notable": True},
+                {"kind": "metric_delta", "field": "load_average", "previous": 0.7, "current": 1.5, "notable": True},
+                {"kind": "metric_delta", "field": "memory_percent", "previous": 61.0, "current": 72.0, "notable": True},
+                {"kind": "metric_delta", "field": "memory_percent", "previous": 61.0, "current": 72.0, "notable": True},
+                {"kind": "metric_delta", "field": "disk_percent", "previous": 68.4, "current": 79.6, "notable": True},
             ],
         }
     )
@@ -388,9 +389,9 @@ def test_brain_command_keeps_change_summary_short_for_normal_telegram_usage(
                     "current": {"running": 6, "restarting": 1},
                     "notable": True,
                 },
-                {"kind": "metric_delta", "field": "load_average", "previous": 0.8, "current": 1.2},
-                {"kind": "metric_delta", "field": "memory_percent", "previous": 63.0, "current": 70.4},
-                {"kind": "metric_delta", "field": "load_average", "previous": 0.8, "current": 1.2},
+                {"kind": "metric_delta", "field": "load_average", "previous": 0.8, "current": 1.2, "notable": True},
+                {"kind": "metric_delta", "field": "memory_percent", "previous": 63.0, "current": 70.4, "notable": True},
+                {"kind": "metric_delta", "field": "load_average", "previous": 0.8, "current": 1.2, "notable": True},
             ],
         }
     )
@@ -405,3 +406,75 @@ def test_brain_command_keeps_change_summary_short_for_normal_telegram_usage(
     assert reply.count("\n- 상태 변경:") == 1
     assert reply.count("\n- 도커 요약 변화:") == 1
     assert reply.count("\n- 지표 변화:") == 1
+
+
+def test_brain_command_ignores_non_notable_service_state_change(make_update_context, monkeypatch):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "partial",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {
+                    "kind": "service_state_change",
+                    "field": "service_states.worker",
+                    "previous": "degraded",
+                    "current": "healthy",
+                    "notable": False,
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "📊 오늘 브리핑\n"
+        "\n"
+        "[서버]\n"
+        "- 일부 점검 필요\n"
+        "\n"
+        "[상태]\n"
+        "⚠️ 일부 정보 누락"
+    )
+
+
+def test_brain_command_renders_only_notable_changes_when_mixed(make_update_context, monkeypatch):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "warning",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {"kind": "restart_detected", "field": "service_states.ai-gateway", "notable": False},
+                {
+                    "kind": "service_state_change",
+                    "field": "service_states.worker-a",
+                    "previous": "healthy",
+                    "current": "degraded",
+                    "notable": True,
+                },
+                {
+                    "kind": "docker_summary_change",
+                    "field": "docker_summary",
+                    "previous": {"running": 7, "restarting": 0},
+                    "current": {"running": 6, "restarting": 1},
+                    "notable": False,
+                },
+                {"kind": "metric_delta", "field": "memory_percent", "previous": 63.0, "current": 70.4, "notable": True},
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert "[변화 감지]" in reply
+    assert "- 상태 변경: worker-a healthy→degraded" in reply
+    assert "- 지표 변화: 메모리 사용률 63.0%→70.4%" in reply
+    assert "재시작 감지" not in reply
+    assert "도커 요약 변화" not in reply
