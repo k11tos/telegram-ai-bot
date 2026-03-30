@@ -266,3 +266,118 @@ def test_brain_command_ignores_unknown_change_kinds_without_format_breakage(
         "[상태]\n"
         "🚨 점검 필요"
     )
+
+
+def test_brain_command_compacts_multiple_service_state_changes(make_update_context, monkeypatch):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "partial",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {
+                    "type": "service_state_change",
+                    "service": "worker-a",
+                    "from_state": "degraded",
+                    "to_state": "healthy",
+                },
+                {
+                    "type": "service_state_change",
+                    "service": "worker-b",
+                    "from_state": "healthy",
+                    "to_state": "degraded",
+                },
+                {
+                    "type": "service_state_change",
+                    "service": "worker-c",
+                    "from_state": "starting",
+                    "to_state": "healthy",
+                },
+                {
+                    "type": "service_state_change",
+                    "service": "worker-d",
+                    "from_state": "healthy",
+                    "to_state": "degraded",
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert reply.count("- 상태 변경:") == 1
+    assert "worker-a degraded→healthy" in reply
+    assert "worker-b healthy→degraded" in reply
+    assert "외 1건" in reply
+
+
+def test_brain_command_deduplicates_metric_changes_for_compact_output(
+    make_update_context, monkeypatch
+):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "warning",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {"type": "metric_delta", "metric": "cpu load 상승"},
+                {"type": "metric_delta", "metric": "cpu load 상승"},
+                {"type": "metric_delta", "metric": "memory pressure 증가"},
+                {"type": "metric_delta", "metric": "memory pressure 증가"},
+                {"type": "metric_delta", "metric": "disk io 급증"},
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert reply.count("- 지표 변화:") == 1
+    assert "cpu load 상승, memory pressure 증가 외 1건" in reply
+
+
+def test_brain_command_keeps_change_summary_short_for_normal_telegram_usage(
+    make_update_context, monkeypatch
+):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "warning",
+            "message_lines": ["ai-gateway 정상", "worker 점검 필요", "디스크 사용률 74.3%"],
+            "has_notable_changes": True,
+            "changes": [
+                {"type": "restart_detected", "service": "ai-gateway"},
+                {
+                    "type": "service_state_change",
+                    "service": "worker-a",
+                    "from_state": "healthy",
+                    "to_state": "degraded",
+                },
+                {
+                    "type": "service_state_change",
+                    "service": "worker-b",
+                    "from_state": "degraded",
+                    "to_state": "healthy",
+                },
+                {"type": "docker_summary_change", "running": 6, "restarting": 1},
+                {"type": "metric_delta", "metric": "cpu load 상승"},
+                {"type": "metric_delta", "metric": "memory pressure 증가"},
+                {"type": "metric_delta", "metric": "cpu load 상승"},
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert len(reply) < 600
+    assert reply.count("\n- 재시작 감지:") == 1
+    assert reply.count("\n- 상태 변경:") == 1
+    assert reply.count("\n- 도커 요약 변화:") == 1
+    assert reply.count("\n- 지표 변화:") == 1

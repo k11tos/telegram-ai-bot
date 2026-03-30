@@ -41,7 +41,13 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
     if has_notable_changes is not True or not isinstance(changes, list):
         return []
 
-    lines: list[str] = []
+    restart_services: list[str] = []
+    service_transitions: list[str] = []
+    has_service_state_fallback = False
+    docker_summary_line: str | None = None
+    metric_changes: list[str] = []
+    has_metric_fallback = False
+
     for change in changes:
         change_type = _get_change_type(change)
         if not change_type:
@@ -50,9 +56,9 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
         if change_type == "restart_detected":
             service = change.get("service")
             if isinstance(service, str) and service.strip():
-                lines.append(f"재시작 감지: {service.strip()}")
-                continue
-            lines.append("재시작 감지")
+                restart_services.append(service.strip())
+            else:
+                restart_services.append("")
             continue
 
         if change_type == "service_state_change":
@@ -67,25 +73,62 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
                 and isinstance(to_state, str)
                 and to_state.strip()
             ):
-                lines.append(f"상태 변경: {service.strip()} {from_state.strip()}→{to_state.strip()}")
-                continue
-            lines.append("상태 변경 감지")
+                service_transitions.append(
+                    f"{service.strip()} {from_state.strip()}→{to_state.strip()}"
+                )
+            else:
+                has_service_state_fallback = True
             continue
 
-        if change_type == "docker_summary_change":
+        if change_type == "docker_summary_change" and docker_summary_line is None:
             running = change.get("running")
             restarting = change.get("restarting")
             if isinstance(running, int) and isinstance(restarting, int):
-                lines.append(f"도커 요약 변화: 실행 {running}, 재시작 {restarting}")
-                continue
-            lines.append("도커 요약 변화")
+                docker_summary_line = f"도커 요약 변화: 실행 {running}, 재시작 {restarting}"
+            else:
+                docker_summary_line = "도커 요약 변화"
             continue
 
         if change_type == "metric_delta":
             metric = change.get("metric")
             if isinstance(metric, str) and metric.strip():
-                lines.append(f"지표 변화: {metric.strip()}")
-                continue
+                metric_value = metric.strip()
+                if metric_value not in metric_changes:
+                    metric_changes.append(metric_value)
+            else:
+                has_metric_fallback = True
+
+    lines: list[str] = []
+    if restart_services:
+        restart_targets = [service for service in restart_services if service]
+        if restart_targets:
+            lines.append(f"재시작 감지: {', '.join(restart_targets)}")
+        else:
+            lines.append("재시작 감지")
+
+    if service_transitions or has_service_state_fallback:
+        transition_snippet = ", ".join(service_transitions[:3])
+        if service_transitions and len(service_transitions) > 3:
+            transition_snippet = f"{transition_snippet} 외 {len(service_transitions) - 3}건"
+
+        if transition_snippet and has_service_state_fallback:
+            lines.append(f"상태 변경: {transition_snippet} (+추가 변경)")
+        elif transition_snippet:
+            lines.append(f"상태 변경: {transition_snippet}")
+        else:
+            lines.append("상태 변경 감지")
+
+    if docker_summary_line:
+        lines.append(docker_summary_line)
+
+    if metric_changes or has_metric_fallback:
+        metric_snippet = ", ".join(metric_changes[:2])
+        if metric_changes and len(metric_changes) > 2:
+            metric_snippet = f"{metric_snippet} 외 {len(metric_changes) - 2}건"
+
+        if metric_snippet:
+            lines.append(f"지표 변화: {metric_snippet}")
+        else:
             lines.append("리소스/부하 변화")
 
     return lines
