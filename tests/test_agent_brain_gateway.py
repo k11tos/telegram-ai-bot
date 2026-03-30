@@ -51,6 +51,49 @@ def test_post_agent_brain_returns_dict_body():
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상", "디스크 사용률 71.2%"],
+        },
+        {
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상", "디스크 사용률 71.2%"],
+            "has_notable_changes": False,
+            "changes": [],
+        },
+        {
+            "overall_status": "warning",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {"type": "restart_detected", "service": "ai-gateway", "count": 1},
+                {
+                    "type": "service_state_change",
+                    "service": "worker",
+                    "from_state": "degraded",
+                    "to_state": "healthy",
+                },
+                {
+                    "type": "docker_summary_change",
+                    "running": 5,
+                    "restarting": 1,
+                },
+                {"type": "new_gateway_change_type", "details": {"foo": "bar"}},
+            ],
+        },
+    ],
+)
+def test_post_agent_brain_accepts_additive_change_fields(payload):
+    client = FakeClient(response=FakeResponse(payload=payload))
+
+    result = asyncio.run(bot.post_agent_brain(client, payload={}))
+
+    assert result == payload
+
+
+@pytest.mark.parametrize(
     ("post_error", "expected_code"),
     [
         (httpx.ConnectTimeout("connect timeout"), "agent_brain_timeout"),
