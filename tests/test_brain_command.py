@@ -116,28 +116,14 @@ def test_brain_command_accepts_empty_additive_change_fields(make_update_context,
     )
 
 
-def test_brain_command_accepts_structured_and_unknown_change_items_without_format_breakage(
-    make_update_context, monkeypatch
-):
+def test_brain_command_shows_restart_detected_change_line(make_update_context, monkeypatch):
     mocked_post_agent_brain = AsyncMock(
         return_value={
-            "overall_status": "warning",
-            "message_lines": ["일부 점검 필요"],
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상"],
             "has_notable_changes": True,
             "changes": [
                 {"type": "restart_detected", "service": "ai-gateway", "count": 1},
-                {
-                    "type": "service_state_change",
-                    "service": "worker",
-                    "from_state": "degraded",
-                    "to_state": "healthy",
-                },
-                {
-                    "type": "docker_summary_change",
-                    "running": 5,
-                    "restarting": 1,
-                },
-                {"type": "new_gateway_change_type", "details": {"foo": "bar"}},
             ],
         }
     )
@@ -146,12 +132,81 @@ def test_brain_command_accepts_structured_and_unknown_change_items_without_forma
 
     asyncio.run(bot.brain_command(update, context))
 
-    assert update.message.replies[-1] == (
-        "📊 오늘 브리핑\n"
-        "\n"
-        "[서버]\n"
-        "- 일부 점검 필요\n"
-        "\n"
-        "[상태]\n"
-        "🚨 점검 필요"
+    reply = update.message.replies[-1]
+    assert "[변화 감지]" in reply
+    assert "- 재시작 감지: ai-gateway" in reply
+
+
+def test_brain_command_shows_service_state_change_line(make_update_context, monkeypatch):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "partial",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {
+                    "type": "service_state_change",
+                    "service": "worker",
+                    "from_state": "degraded",
+                    "to_state": "healthy",
+                }
+            ],
+        }
     )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert "[변화 감지]" in reply
+    assert "- 상태 변경: worker degraded→healthy" in reply
+
+
+def test_brain_command_shows_docker_summary_change_line(make_update_context, monkeypatch):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상"],
+            "has_notable_changes": True,
+            "changes": [
+                {
+                    "type": "docker_summary_change",
+                    "running": 5,
+                    "restarting": 1,
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert "[변화 감지]" in reply
+    assert "- 도커 요약 변화: 실행 5, 재시작 1" in reply
+
+
+def test_brain_command_shows_metric_delta_change_line(make_update_context, monkeypatch):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "warning",
+            "message_lines": ["일부 점검 필요"],
+            "has_notable_changes": True,
+            "changes": [
+                {
+                    "type": "metric_delta",
+                    "metric": "cpu load 상승",
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert "[변화 감지]" in reply
+    assert "- 지표 변화: cpu load 상승" in reply
