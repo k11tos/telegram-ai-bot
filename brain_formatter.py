@@ -26,24 +26,95 @@ def normalize_brain_message_lines(message_lines: Any) -> list[str]:
     return BRAIN_MESSAGE_LINES_FALLBACK.copy()
 
 
+def _get_change_type(change: Any) -> str:
+    if not isinstance(change, dict):
+        return ""
 
-def build_brain_message(overall_status: str | None, message_lines: Any) -> str:
+    change_type = change.get("type")
+    if not isinstance(change_type, str):
+        return ""
+
+    return change_type.strip().lower()
+
+
+def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str]:
+    if has_notable_changes is not True or not isinstance(changes, list):
+        return []
+
+    lines: list[str] = []
+    for change in changes:
+        change_type = _get_change_type(change)
+        if not change_type:
+            continue
+
+        if change_type == "restart_detected":
+            service = change.get("service")
+            if isinstance(service, str) and service.strip():
+                lines.append(f"재시작 감지: {service.strip()}")
+                continue
+            lines.append("재시작 감지")
+            continue
+
+        if change_type == "service_state_change":
+            service = change.get("service")
+            from_state = change.get("from_state")
+            to_state = change.get("to_state")
+            if (
+                isinstance(service, str)
+                and service.strip()
+                and isinstance(from_state, str)
+                and from_state.strip()
+                and isinstance(to_state, str)
+                and to_state.strip()
+            ):
+                lines.append(f"상태 변경: {service.strip()} {from_state.strip()}→{to_state.strip()}")
+                continue
+            lines.append("상태 변경 감지")
+            continue
+
+        if change_type == "docker_summary_change":
+            running = change.get("running")
+            restarting = change.get("restarting")
+            if isinstance(running, int) and isinstance(restarting, int):
+                lines.append(f"도커 요약 변화: 실행 {running}, 재시작 {restarting}")
+                continue
+            lines.append("도커 요약 변화")
+            continue
+
+        if change_type == "metric_delta":
+            metric = change.get("metric")
+            if isinstance(metric, str) and metric.strip():
+                lines.append(f"지표 변화: {metric.strip()}")
+                continue
+            lines.append("리소스/부하 변화")
+
+    return lines
+
+
+
+def build_brain_message(
+    overall_status: str | None,
+    message_lines: Any,
+    has_notable_changes: Any = False,
+    changes: Any = None,
+) -> str:
+    change_lines = build_brain_change_lines(has_notable_changes, changes)
     section_lines = "\n".join(f"- {line}" for line in normalize_brain_message_lines(message_lines))
 
-    return "\n".join(
-        [
-            "📊 오늘 브리핑",
-            "",
-            "[서버]",
-            section_lines,
-            "",
-            "[상태]",
-            format_brain_overall_status(overall_status),
-        ]
-    )
+    message_parts = ["📊 오늘 브리핑", "", "[서버]", section_lines, "", "[상태]", format_brain_overall_status(overall_status)]
+    if change_lines:
+        change_section = "\n".join(f"- {line}" for line in change_lines)
+        message_parts.extend(["", "[변화 감지]", change_section])
+
+    return "\n".join(message_parts)
 
 
 
 def render_brain_payload(brain_payload: dict[str, Any] | None) -> str:
     payload = brain_payload if isinstance(brain_payload, dict) else {}
-    return build_brain_message(payload.get("overall_status"), payload.get("message_lines"))
+    return build_brain_message(
+        payload.get("overall_status"),
+        payload.get("message_lines"),
+        payload.get("has_notable_changes"),
+        payload.get("changes"),
+    )
