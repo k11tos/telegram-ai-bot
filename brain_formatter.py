@@ -68,6 +68,8 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
                 and to_state.strip()
             ):
                 lines.append(f"상태 변경: {service.strip()} {from_state.strip()}→{to_state.strip()}")
+                continue
+            lines.append("상태 변경 감지")
             continue
 
         if change_type == "docker_summary_change":
