@@ -764,6 +764,24 @@ def get_user_brain_alert_mode(user_id: int) -> str:
     return normalize_brain_alert_mode(selected_mode)
 
 
+def should_send_brain_alert(mode: str, brain_payload: dict | None) -> bool:
+    normalized_mode = normalize_brain_alert_mode(mode)
+    if normalized_mode == "off":
+        return False
+    if normalized_mode == "all":
+        return True
+    if normalized_mode == "notable":
+        if not isinstance(brain_payload, dict):
+            return False
+        return brain_payload.get("has_notable_changes") is True
+    return False
+
+
+def build_scheduled_brain_alert_message(brain_payload: dict | None) -> str:
+    automatic_prefix = "⏰ 자동 브레인 브리핑"
+    return f"{automatic_prefix}\n\n{render_brain_payload(brain_payload)}"
+
+
 async def brainalert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     requested_mode = " ".join(context.args).strip().lower() if context.args else ""
@@ -1658,10 +1676,10 @@ async def send_scheduled_brain_alert(app, user_id: int, mode: str) -> bool:
         )
         return False
 
-    if mode == "notable" and brain_payload.get("has_notable_changes") is not True:
+    if not should_send_brain_alert(mode, brain_payload):
         return False
 
-    final_message = render_brain_payload(brain_payload)
+    final_message = build_scheduled_brain_alert_message(brain_payload)
     message_chunks = split_telegram_text(final_message)
     try:
         await app.bot.send_message(chat_id=user_id, text=message_chunks[0])
