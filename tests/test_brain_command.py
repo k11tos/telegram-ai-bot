@@ -251,7 +251,35 @@ def test_brain_command_keeps_docker_summary_legacy_restarting_fallback(
 
     reply = update.message.replies[-1]
     assert "[변화 감지]" in reply
-    assert "- 도커 요약 변화: 실행 4→5, 중지 0→1" in reply
+    assert "- 도커 요약 변화: 실행 4→5, 재시작 0→1" in reply
+
+
+def test_brain_command_keeps_legacy_non_transition_docker_restarting_label(
+    make_update_context, monkeypatch
+):
+    mocked_post_agent_brain = AsyncMock(
+        return_value={
+            "overall_status": "ok",
+            "message_lines": ["ai-gateway 정상"],
+            "has_notable_changes": True,
+            "changes": [
+                {
+                    "kind": "docker_summary_change",
+                    "running": 5,
+                    "restarting": 1,
+                    "notable": True,
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+    update, context = make_update_context(text="/brain", client=object())
+
+    asyncio.run(bot.brain_command(update, context))
+
+    reply = update.message.replies[-1]
+    assert "[변화 감지]" in reply
+    assert "- 도커 요약 변화: 실행 5, 재시작 1" in reply
 
 
 def test_brain_command_shows_metric_delta_change_line(make_update_context, monkeypatch):

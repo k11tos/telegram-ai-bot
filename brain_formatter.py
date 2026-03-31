@@ -129,12 +129,15 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
             if isinstance(previous, dict) and isinstance(current, dict):
                 prev_running = previous.get("running")
                 prev_stopped = previous.get("stopped")
+                stopped_label = "중지"
                 if not isinstance(prev_stopped, int):
                     prev_stopped = previous.get("restarting")
+                    stopped_label = "재시작"
                 running = current.get("running")
                 stopped = current.get("stopped")
                 if not isinstance(stopped, int):
                     stopped = current.get("restarting")
+                    stopped_label = "재시작"
                 if (
                     isinstance(prev_running, int)
                     and isinstance(prev_stopped, int)
@@ -142,17 +145,19 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
                     and isinstance(stopped, int)
                 ):
                     docker_summary_line = (
-                        f"도커 요약 변화: 실행 {prev_running}→{running}, 중지 {prev_stopped}→{stopped}"
+                        f"도커 요약 변화: 실행 {prev_running}→{running}, {stopped_label} {prev_stopped}→{stopped}"
                     )
                 else:
                     docker_summary_line = "도커 요약 변화"
             else:
                 running = change.get("running")
                 stopped = change.get("stopped")
+                stopped_label = "중지"
                 if not isinstance(stopped, int):
                     stopped = change.get("restarting")
+                    stopped_label = "재시작"
                 if isinstance(running, int) and isinstance(stopped, int):
-                    docker_summary_line = f"도커 요약 변화: 실행 {running}, 중지 {stopped}"
+                    docker_summary_line = f"도커 요약 변화: 실행 {running}, {stopped_label} {stopped}"
                 else:
                     docker_summary_line = "도커 요약 변화"
             continue
