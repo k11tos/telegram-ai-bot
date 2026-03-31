@@ -37,6 +37,7 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/version" in reply
     assert "/health" in reply
     assert "/brain" in reply
+    assert "/brainalert" in reply
     assert "/session" in reply
     assert "/docmode" in reply
 
@@ -178,6 +179,57 @@ def test_docmode_command_handles_invalid_mode(make_update_context):
     assert update.message.replies[-1] == (
         "지원하지 않는 문서 요약 모드입니다. "
         f"사용 가능: {bot.DOCUMENT_SUMMARY_MODES_TEXT}"
+    )
+
+
+def test_brainalert_command_shows_default_mode_when_unset(make_update_context):
+    user_id = 910
+    update, context = make_update_context(
+        user_id=user_id, text="/brainalert", client=None, args=[]
+    )
+
+    asyncio.run(bot.brainalert_command(update, context))
+
+    assert update.message.replies[-1] == "현재 브리핑 알림: off"
+
+
+def test_brainalert_command_switches_modes_and_supports_on_alias(make_update_context):
+    user_id = 911
+
+    on_update, on_context = make_update_context(
+        user_id=user_id, text="/brainalert on", client=None, args=["on"]
+    )
+    asyncio.run(bot.brainalert_command(on_update, on_context))
+    assert bot.user_brain_alert_modes[user_id] == "notable"
+    assert on_update.message.replies[-1] == "브리핑 알림 모드가 변경되었습니다: notable"
+
+    all_update, all_context = make_update_context(
+        user_id=user_id, text="/brainalert all", client=None, args=["all"]
+    )
+    asyncio.run(bot.brainalert_command(all_update, all_context))
+    assert bot.user_brain_alert_modes[user_id] == "all"
+    assert all_update.message.replies[-1] == "브리핑 알림 모드가 변경되었습니다: all"
+
+    off_update, off_context = make_update_context(
+        user_id=user_id, text="/brainalert off", client=None, args=["off"]
+    )
+    asyncio.run(bot.brainalert_command(off_update, off_context))
+    assert bot.user_brain_alert_modes[user_id] == "off"
+    assert off_update.message.replies[-1] == "브리핑 알림 모드가 변경되었습니다: off"
+
+
+def test_brainalert_command_handles_invalid_mode(make_update_context):
+    user_id = 912
+    update, context = make_update_context(
+        user_id=user_id, text="/brainalert unknown", client=None, args=["unknown"]
+    )
+
+    asyncio.run(bot.brainalert_command(update, context))
+
+    assert user_id not in bot.user_brain_alert_modes
+    assert update.message.replies[-1] == (
+        "지원하지 않는 브리핑 알림 모드입니다. "
+        f"사용 가능: {bot.BRAIN_ALERT_MODES_TEXT}"
     )
 
 
@@ -1012,6 +1064,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     bot.user_selected_models[10] = "gpt-4o-mini"
     bot.user_selected_presets[10] = "coder"
     bot.user_document_summary_modes[10] = "action"
+    bot.user_brain_alert_modes[10] = "notable"
 
     bot.save_bot_state()
 
@@ -1022,6 +1075,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
     assert '"selected_presets":{"10":"coder"}' in payload
     assert '"document_summary_modes":{"10":"action"}' in payload
+    assert '"brain_alert_modes":{"10":"notable"}' in payload
 
 
 def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
@@ -1031,7 +1085,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     state_path.write_text(
         '{"version":1,"conversations":{"123":{"default":["User: a","AI: b"]}},"active_sessions":{"123":"default"},'
         '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"},'
-        '"document_summary_modes":{"123":"BULLETS"}}',
+        '"document_summary_modes":{"123":"BULLETS"},"brain_alert_modes":{"123":"all"}}',
         encoding="utf-8",
     )
     monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
@@ -1043,6 +1097,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.user_selected_models[123] == "gpt-4o-mini"
     assert bot.user_selected_presets[123] == "english"
     assert bot.user_document_summary_modes[123] == "bullets"
+    assert bot.user_brain_alert_modes[123] == "all"
 
 
 def test_load_bot_state_normalizes_invalid_document_mode_to_default(tmp_path, monkeypatch):

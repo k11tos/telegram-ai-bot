@@ -42,6 +42,7 @@ def clear_bot_state():
     bot.user_selected_models.clear()
     bot.user_selected_presets.clear()
     bot.user_document_summary_modes.clear()
+    bot.user_brain_alert_modes.clear()
     yield
     bot.conversations.clear()
     bot.user_active_sessions.clear()
@@ -54,6 +55,7 @@ def clear_bot_state():
     bot.user_selected_models.clear()
     bot.user_selected_presets.clear()
     bot.user_document_summary_modes.clear()
+    bot.user_brain_alert_modes.clear()
 
 
 @pytest.fixture
