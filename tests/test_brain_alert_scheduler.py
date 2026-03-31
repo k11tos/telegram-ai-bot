@@ -23,10 +23,11 @@ def test_brain_alert_scheduler_skips_opted_out_users():
 
     scheduler = BrainAlertScheduler(
         user_brain_alert_modes=user_modes,
+        user_brain_alert_times={},
         last_sent_windows=sent_windows,
         send_alert_for_user=send_alert,
         logger=bot.logger,
-        schedule_hour_local=9,
+        default_time_local="09:00",
         now_func=FixedNow(now),
     )
 
@@ -45,10 +46,11 @@ def test_brain_alert_scheduler_prevents_duplicate_send_within_same_window():
 
     scheduler = BrainAlertScheduler(
         user_brain_alert_modes=user_modes,
+        user_brain_alert_times={},
         last_sent_windows=sent_windows,
         send_alert_for_user=send_alert,
         logger=bot.logger,
-        schedule_hour_local=9,
+        default_time_local="09:00",
         now_func=FixedNow(now),
     )
 
@@ -57,6 +59,38 @@ def test_brain_alert_scheduler_prevents_duplicate_send_within_same_window():
 
     send_alert.assert_awaited_once_with(50, "all")
     assert sent_windows[50] == "2026-03-31"
+
+
+def test_brain_alert_scheduler_respects_user_configured_time():
+    send_alert = AsyncMock(return_value=True)
+    user_modes = {70: "all"}
+    user_times = {70: "07:30"}
+    sent_windows = {}
+
+    scheduler_before = BrainAlertScheduler(
+        user_brain_alert_modes=user_modes,
+        user_brain_alert_times=user_times,
+        last_sent_windows=sent_windows,
+        send_alert_for_user=send_alert,
+        logger=bot.logger,
+        default_time_local="09:00",
+        now_func=FixedNow(datetime(2026, 3, 31, 7, 29)),
+    )
+    asyncio.run(scheduler_before.run_once())
+    send_alert.assert_not_awaited()
+
+    scheduler_after = BrainAlertScheduler(
+        user_brain_alert_modes=user_modes,
+        user_brain_alert_times=user_times,
+        last_sent_windows=sent_windows,
+        send_alert_for_user=send_alert,
+        logger=bot.logger,
+        default_time_local="09:00",
+        now_func=FixedNow(datetime(2026, 3, 31, 7, 30)),
+    )
+    asyncio.run(scheduler_after.run_once())
+    send_alert.assert_awaited_once_with(70, "all")
+    assert sent_windows[70] == "2026-03-31"
 
 
 def test_should_send_brain_alert_respects_notable_and_all_modes():
@@ -116,12 +150,13 @@ def test_brain_alert_scheduler_malformed_payload_does_not_crash_loop(monkeypatch
 
     scheduler = BrainAlertScheduler(
         user_brain_alert_modes=user_modes,
+        user_brain_alert_times={},
         last_sent_windows=sent_windows,
         send_alert_for_user=lambda user_id, mode: bot.send_scheduled_brain_alert(
             app, user_id, mode
         ),
         logger=bot.logger,
-        schedule_hour_local=9,
+        default_time_local="09:00",
         now_func=FixedNow(now),
     )
 

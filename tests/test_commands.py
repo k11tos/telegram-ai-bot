@@ -190,7 +190,10 @@ def test_brainalert_command_shows_default_mode_when_unset(make_update_context):
 
     asyncio.run(bot.brainalert_command(update, context))
 
-    assert update.message.replies[-1] == "현재 브리핑 알림: off"
+    assert update.message.replies[-1] == (
+        f"현재 브리핑 알림 모드: off\n"
+        f"현재 브리핑 알림 시간: {bot.DEFAULT_BRAIN_ALERT_TIME_LOCAL} ({bot.BRAIN_ALERT_TIMEZONE_LABEL})"
+    )
 
 
 def test_brainalert_command_switches_modes_and_supports_on_alias(make_update_context):
@@ -230,6 +233,38 @@ def test_brainalert_command_handles_invalid_mode(make_update_context):
     assert update.message.replies[-1] == (
         "지원하지 않는 브리핑 알림 모드입니다. "
         f"사용 가능: {bot.BRAIN_ALERT_MODES_TEXT}"
+    )
+
+
+def test_get_user_brain_alert_time_defaults_when_unset():
+    assert bot.get_user_brain_alert_time(999) == bot.DEFAULT_BRAIN_ALERT_TIME_LOCAL
+
+
+def test_brainalert_command_sets_valid_time(make_update_context):
+    user_id = 913
+    update, context = make_update_context(
+        user_id=user_id, text="/brainalert time 07:00", client=None, args=["time", "07:00"]
+    )
+
+    asyncio.run(bot.brainalert_command(update, context))
+
+    assert bot.user_brain_alert_times[user_id] == "07:00"
+    assert update.message.replies[-1] == (
+        f"브리핑 알림 시간이 변경되었습니다: 07:00 ({bot.BRAIN_ALERT_TIMEZONE_LABEL})"
+    )
+
+
+def test_brainalert_command_rejects_invalid_time(make_update_context):
+    user_id = 914
+    update, context = make_update_context(
+        user_id=user_id, text="/brainalert time 7:99", client=None, args=["time", "7:99"]
+    )
+
+    asyncio.run(bot.brainalert_command(update, context))
+
+    assert user_id not in bot.user_brain_alert_times
+    assert update.message.replies[-1] == (
+        "지원하지 않는 시간 형식입니다. HH:MM(24시간제)로 입력해 주세요."
     )
 
 
@@ -1065,6 +1100,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     bot.user_selected_presets[10] = "coder"
     bot.user_document_summary_modes[10] = "action"
     bot.user_brain_alert_modes[10] = "notable"
+    bot.user_brain_alert_times[10] = "07:00"
 
     bot.save_bot_state()
 
@@ -1076,6 +1112,7 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     assert '"selected_presets":{"10":"coder"}' in payload
     assert '"document_summary_modes":{"10":"action"}' in payload
     assert '"brain_alert_modes":{"10":"notable"}' in payload
+    assert '"brain_alert_times":{"10":"07:00"}' in payload
 
 
 def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
@@ -1085,7 +1122,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     state_path.write_text(
         '{"version":1,"conversations":{"123":{"default":["User: a","AI: b"]}},"active_sessions":{"123":"default"},'
         '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"},'
-        '"document_summary_modes":{"123":"BULLETS"},"brain_alert_modes":{"123":"all"}}',
+        '"document_summary_modes":{"123":"BULLETS"},"brain_alert_modes":{"123":"all"},"brain_alert_times":{"123":"07:00"}}',
         encoding="utf-8",
     )
     monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
@@ -1098,6 +1135,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.user_selected_presets[123] == "english"
     assert bot.user_document_summary_modes[123] == "bullets"
     assert bot.user_brain_alert_modes[123] == "all"
+    assert bot.user_brain_alert_times[123] == "07:00"
 
 
 def test_load_bot_state_normalizes_brain_alert_on_alias_to_notable(tmp_path, monkeypatch):
