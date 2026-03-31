@@ -59,6 +59,79 @@ def test_brain_alert_scheduler_prevents_duplicate_send_within_same_window():
     assert sent_windows[50] == "2026-03-31"
 
 
+def test_should_send_brain_alert_respects_notable_and_all_modes():
+    notable_payload = {"has_notable_changes": True}
+    non_notable_payload = {"has_notable_changes": False}
+
+    assert bot.should_send_brain_alert("off", notable_payload) is False
+    assert bot.should_send_brain_alert("notable", notable_payload) is True
+    assert bot.should_send_brain_alert("notable", non_notable_payload) is False
+    assert bot.should_send_brain_alert("all", non_notable_payload) is True
+
+
+def test_send_scheduled_brain_alert_notable_mode_skips_without_changes(monkeypatch):
+    app = SimpleNamespace(
+        bot_data={bot.HTTP_CLIENT_KEY: object()},
+        bot=SimpleNamespace(send_message=AsyncMock()),
+    )
+    mocked_post_agent_brain = AsyncMock(
+        return_value={"overall_status": "ok", "message_lines": ["정상"], "has_notable_changes": False}
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+
+    sent = asyncio.run(bot.send_scheduled_brain_alert(app, user_id=101, mode="notable"))
+
+    assert sent is False
+    app.bot.send_message.assert_not_awaited()
+
+
+def test_send_scheduled_brain_alert_all_mode_sends_without_changes(monkeypatch):
+    app = SimpleNamespace(
+        bot_data={bot.HTTP_CLIENT_KEY: object()},
+        bot=SimpleNamespace(send_message=AsyncMock()),
+    )
+    mocked_post_agent_brain = AsyncMock(
+        return_value={"overall_status": "ok", "message_lines": ["정상"], "has_notable_changes": False}
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", mocked_post_agent_brain)
+
+    sent = asyncio.run(bot.send_scheduled_brain_alert(app, user_id=102, mode="all"))
+
+    assert sent is True
+    app.bot.send_message.assert_awaited()
+    first_text = app.bot.send_message.await_args_list[0].kwargs["text"]
+    assert "⏰ 자동 브레인 브리핑" in first_text
+
+
+def test_brain_alert_scheduler_malformed_payload_does_not_crash_loop(monkeypatch):
+    send_mock = AsyncMock()
+    app = SimpleNamespace(
+        bot_data={bot.HTTP_CLIENT_KEY: object()},
+        bot=SimpleNamespace(send_message=send_mock),
+    )
+    monkeypatch.setattr(bot, "post_agent_brain", AsyncMock(return_value="malformed-payload"))
+    user_modes = {201: "notable", 202: "all"}
+    sent_windows = {}
+    now = datetime(2026, 3, 31, 9, 30)
+
+    scheduler = BrainAlertScheduler(
+        user_brain_alert_modes=user_modes,
+        last_sent_windows=sent_windows,
+        send_alert_for_user=lambda user_id, mode: bot.send_scheduled_brain_alert(
+            app, user_id, mode
+        ),
+        logger=bot.logger,
+        schedule_hour_local=9,
+        now_func=FixedNow(now),
+    )
+
+    asyncio.run(scheduler.run_once())
+
+    assert sent_windows[202] == "2026-03-31"
+    assert 201 not in sent_windows
+    send_mock.assert_awaited()
+
+
 def test_init_and_shutdown_manage_brain_alert_scheduler(monkeypatch):
     class FakeBot:
         def __init__(self):
