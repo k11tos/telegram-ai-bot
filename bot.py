@@ -13,6 +13,7 @@ from brain_alert_scheduler import (
     BrainAlertScheduler,
     DEFAULT_BRAIN_ALERT_POLL_INTERVAL_SECONDS,
     DEFAULT_BRAIN_ALERT_SCHEDULE_HOUR_LOCAL,
+    is_valid_brain_alert_time_text,
 )
 from brain_formatter import render_brain_payload
 from dotenv import load_dotenv
@@ -144,6 +145,7 @@ class RuntimeState:
     user_selected_presets: dict[int, str] = field(default_factory=dict)
     user_document_summary_modes: dict[int, str] = field(default_factory=dict)
     user_brain_alert_modes: dict[int, str] = field(default_factory=dict)
+    user_brain_alert_times: dict[int, str] = field(default_factory=dict)
     user_brain_alert_sent_windows: dict[int, str] = field(default_factory=dict)
 
 
@@ -162,6 +164,7 @@ user_selected_models = runtime_state.user_selected_models
 user_selected_presets = runtime_state.user_selected_presets
 user_document_summary_modes = runtime_state.user_document_summary_modes
 user_brain_alert_modes = runtime_state.user_brain_alert_modes
+user_brain_alert_times = runtime_state.user_brain_alert_times
 user_brain_alert_sent_windows = runtime_state.user_brain_alert_sent_windows
 MODEL_RESET_ALIASES = {"default", "reset"}
 
@@ -224,6 +227,8 @@ BRAIN_ALERT_SCHEDULE_HOUR_LOCAL = int(
     )
 )
 BRAIN_ALERT_SCHEDULER_KEY = "brain_alert_scheduler"
+DEFAULT_BRAIN_ALERT_TIME_LOCAL = f"{BRAIN_ALERT_SCHEDULE_HOUR_LOCAL:02d}:00"
+BRAIN_ALERT_TIMEZONE_LABEL = os.getenv("BRAIN_ALERT_TIMEZONE_LABEL", "server local time")
 DOCUMENT_SUMMARY_MODES_TEXT = ", ".join(SUPPORTED_DOCUMENT_SUMMARY_MODES)
 DEFAULT_BRAIN_ALERT_MODE = "off"
 SUPPORTED_BRAIN_ALERT_MODES = ("off", "notable", "all")
@@ -239,7 +244,7 @@ HELP_LINES = [
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
     "/brain - 시스템 브리핑 요약",
-    "/brainalert [on|off|notable|all] - 브리핑 알림 모드 확인 또는 변경",
+    "/brainalert [on|off|notable|all|time HH:MM] - 브리핑 알림 모드/시간 확인 또는 변경",
     "/session [name] - 현재 세션 확인 또는 변경",
     "/session_rename <old> <new> - 세션 이름 변경",
     "/session_clear <name> - 세션 기록만 비우기",
@@ -264,6 +269,7 @@ def build_state_payload() -> dict[str, object]:
         runtime_state.user_selected_presets,
         runtime_state.user_document_summary_modes,
         runtime_state.user_brain_alert_modes,
+        runtime_state.user_brain_alert_times,
     )
 
 
@@ -277,6 +283,7 @@ def save_bot_state() -> None:
         runtime_state.user_selected_presets,
         runtime_state.user_document_summary_modes,
         runtime_state.user_brain_alert_modes,
+        runtime_state.user_brain_alert_times,
         logger,
     )
 
@@ -309,6 +316,8 @@ def load_bot_state() -> None:
     runtime_state.user_document_summary_modes.update(loaded_state["document_summary_modes"])
     runtime_state.user_brain_alert_modes.clear()
     runtime_state.user_brain_alert_modes.update(loaded_state["brain_alert_modes"])
+    runtime_state.user_brain_alert_times.clear()
+    runtime_state.user_brain_alert_times.update(loaded_state["brain_alert_times"])
     runtime_state.user_brain_alert_sent_windows.clear()
 
 
@@ -764,6 +773,16 @@ def get_user_brain_alert_mode(user_id: int) -> str:
     return normalize_brain_alert_mode(selected_mode)
 
 
+def get_user_brain_alert_time(user_id: int) -> str:
+    selected_time = runtime_state.user_brain_alert_times.get(user_id)
+    if not isinstance(selected_time, str):
+        return DEFAULT_BRAIN_ALERT_TIME_LOCAL
+    normalized_time = selected_time.strip()
+    if is_valid_brain_alert_time_text(normalized_time):
+        return normalized_time
+    return DEFAULT_BRAIN_ALERT_TIME_LOCAL
+
+
 def should_send_brain_alert(mode: str, brain_payload: dict | None) -> bool:
     normalized_mode = normalize_brain_alert_mode(mode)
     if normalized_mode == "off":
@@ -788,7 +807,32 @@ async def brainalert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if not requested_mode:
         current_mode = get_user_brain_alert_mode(user_id)
-        await update.message.reply_text(f"현재 브리핑 알림: {current_mode}")
+        current_time = get_user_brain_alert_time(user_id)
+        await update.message.reply_text(
+            f"현재 브리핑 알림 모드: {current_mode}\n"
+            f"현재 브리핑 알림 시간: {current_time} ({BRAIN_ALERT_TIMEZONE_LABEL})"
+        )
+        return
+
+    if context.args and context.args[0].lower() == "time":
+        if len(context.args) != 2:
+            await update.message.reply_text("시간 설정 형식: /brainalert time HH:MM")
+            return
+
+        requested_time = context.args[1].strip()
+        if not is_valid_brain_alert_time_text(requested_time):
+            await update.message.reply_text(
+                "지원하지 않는 시간 형식입니다. HH:MM(24시간제)로 입력해 주세요."
+            )
+            return
+
+        lock = get_user_lock(user_id)
+        async with lock:
+            runtime_state.user_brain_alert_times[user_id] = requested_time
+            request_state_save("brainalert_time_change")
+        await update.message.reply_text(
+            f"브리핑 알림 시간이 변경되었습니다: {requested_time} ({BRAIN_ALERT_TIMEZONE_LABEL})"
+        )
         return
 
     if requested_mode not in {"on", *SUPPORTED_BRAIN_ALERT_MODES}:
@@ -1637,13 +1681,14 @@ async def init_http_client(app):
     await load_gateway_presets(app)
     scheduler = BrainAlertScheduler(
         user_brain_alert_modes=runtime_state.user_brain_alert_modes,
+        user_brain_alert_times=runtime_state.user_brain_alert_times,
         last_sent_windows=runtime_state.user_brain_alert_sent_windows,
         send_alert_for_user=lambda user_id, mode: send_scheduled_brain_alert(
             app, user_id, mode
         ),
         logger=logger,
         poll_interval_seconds=BRAIN_ALERT_POLL_INTERVAL_SECONDS,
-        schedule_hour_local=BRAIN_ALERT_SCHEDULE_HOUR_LOCAL,
+        default_time_local=DEFAULT_BRAIN_ALERT_TIME_LOCAL,
     )
     scheduler.start()
     app.bot_data[BRAIN_ALERT_SCHEDULER_KEY] = scheduler

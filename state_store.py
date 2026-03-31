@@ -23,6 +23,7 @@ def build_state_payload(
     user_selected_presets: dict,
     user_document_summary_modes: dict,
     user_brain_alert_modes: dict,
+    user_brain_alert_times: dict,
 ) -> dict[str, object]:
     serialized_conversations: dict[str, dict[str, list[str]]] = {}
     for user_id, per_session in conversations.items():
@@ -54,6 +55,9 @@ def build_state_payload(
         "brain_alert_modes": {
             str(user_id): mode for user_id, mode in user_brain_alert_modes.items()
         },
+        "brain_alert_times": {
+            str(user_id): time_text for user_id, time_text in user_brain_alert_times.items()
+        },
     }
 
 
@@ -66,6 +70,7 @@ def save_bot_state(
     user_selected_presets: dict,
     user_document_summary_modes: dict,
     user_brain_alert_modes: dict,
+    user_brain_alert_times: dict,
     logger: logging.Logger,
 ) -> None:
     try:
@@ -77,6 +82,7 @@ def save_bot_state(
             user_selected_presets,
             user_document_summary_modes,
             user_brain_alert_modes,
+            user_brain_alert_times,
         )
         temp_path = f"{state_file_path}.tmp"
         with open(temp_path, "w", encoding="utf-8") as state_file:
@@ -100,6 +106,7 @@ def load_bot_state(
     loaded_presets: dict[int, str] = {}
     loaded_document_summary_modes: dict[int, str] = {}
     loaded_brain_alert_modes: dict[int, str] = {}
+    loaded_brain_alert_times: dict[int, str] = {}
 
     if not os.path.exists(state_file_path):
         logger.info("state_file_missing path=%s", state_file_path)
@@ -191,6 +198,26 @@ def load_bot_state(
                         if normalized_mode in {"off", "notable", "all"}:
                             loaded_brain_alert_modes[user_id] = normalized_mode
 
+                raw_brain_alert_times = payload.get("brain_alert_times", {})
+                if isinstance(raw_brain_alert_times, dict):
+                    normalized_brain_alert_times = _normalize_int_key_mapping(raw_brain_alert_times)
+                    for user_id, raw_time in normalized_brain_alert_times.items():
+                        if not isinstance(raw_time, str):
+                            continue
+                        if len(raw_time) != 5:
+                            continue
+                        hour_part, sep, minute_part = raw_time.partition(":")
+                        if sep != ":":
+                            continue
+                        if len(hour_part) != 2 or len(minute_part) != 2:
+                            continue
+                        if not (hour_part.isdigit() and minute_part.isdigit()):
+                            continue
+                        hour = int(hour_part)
+                        minute = int(minute_part)
+                        if 0 <= hour <= 23 and 0 <= minute <= 59:
+                            loaded_brain_alert_times[user_id] = f"{hour:02d}:{minute:02d}"
+
     return {
         "conversations": loaded_conversations,
         "active_sessions": loaded_active_sessions,
@@ -198,4 +225,5 @@ def load_bot_state(
         "selected_presets": loaded_presets,
         "document_summary_modes": loaded_document_summary_modes,
         "brain_alert_modes": loaded_brain_alert_modes,
+        "brain_alert_times": loaded_brain_alert_times,
     }
