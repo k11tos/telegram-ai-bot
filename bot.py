@@ -9,6 +9,12 @@ import time
 import uuid
 
 import httpx
+from brain_alert_scheduler import (
+    BrainAlertScheduler,
+    DEFAULT_BRAIN_ALERT_POLL_INTERVAL_SECONDS,
+    DEFAULT_BRAIN_ALERT_SCHEDULE_HOUR_LOCAL,
+)
+from brain_formatter import render_brain_payload
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -138,6 +144,7 @@ class RuntimeState:
     user_selected_presets: dict[int, str] = field(default_factory=dict)
     user_document_summary_modes: dict[int, str] = field(default_factory=dict)
     user_brain_alert_modes: dict[int, str] = field(default_factory=dict)
+    user_brain_alert_sent_windows: dict[int, str] = field(default_factory=dict)
 
 
 runtime_state = RuntimeState()
@@ -155,6 +162,7 @@ user_selected_models = runtime_state.user_selected_models
 user_selected_presets = runtime_state.user_selected_presets
 user_document_summary_modes = runtime_state.user_document_summary_modes
 user_brain_alert_modes = runtime_state.user_brain_alert_modes
+user_brain_alert_sent_windows = runtime_state.user_brain_alert_sent_windows
 MODEL_RESET_ALIASES = {"default", "reset"}
 
 LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
@@ -203,6 +211,19 @@ SUPPORTED_DOCUMENT_EXTENSIONS = (
 SUPPORTED_DOCUMENT_EXTENSIONS_TEXT = ", ".join(SUPPORTED_DOCUMENT_EXTENSIONS)
 MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
+BRAIN_ALERT_POLL_INTERVAL_SECONDS = float(
+    os.getenv(
+        "BRAIN_ALERT_POLL_INTERVAL_SECONDS",
+        str(DEFAULT_BRAIN_ALERT_POLL_INTERVAL_SECONDS),
+    )
+)
+BRAIN_ALERT_SCHEDULE_HOUR_LOCAL = int(
+    os.getenv(
+        "BRAIN_ALERT_SCHEDULE_HOUR_LOCAL",
+        str(DEFAULT_BRAIN_ALERT_SCHEDULE_HOUR_LOCAL),
+    )
+)
+BRAIN_ALERT_SCHEDULER_KEY = "brain_alert_scheduler"
 DOCUMENT_SUMMARY_MODES_TEXT = ", ".join(SUPPORTED_DOCUMENT_SUMMARY_MODES)
 DEFAULT_BRAIN_ALERT_MODE = "off"
 SUPPORTED_BRAIN_ALERT_MODES = ("off", "notable", "all")
@@ -288,6 +309,7 @@ def load_bot_state() -> None:
     runtime_state.user_document_summary_modes.update(loaded_state["document_summary_modes"])
     runtime_state.user_brain_alert_modes.clear()
     runtime_state.user_brain_alert_modes.update(loaded_state["brain_alert_modes"])
+    runtime_state.user_brain_alert_sent_windows.clear()
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
@@ -1595,12 +1617,66 @@ async def init_http_client(app):
         limits=limits,
     )
     await load_gateway_presets(app)
+    scheduler = BrainAlertScheduler(
+        user_brain_alert_modes=runtime_state.user_brain_alert_modes,
+        last_sent_windows=runtime_state.user_brain_alert_sent_windows,
+        send_alert_for_user=lambda user_id, mode: send_scheduled_brain_alert(
+            app, user_id, mode
+        ),
+        logger=logger,
+        poll_interval_seconds=BRAIN_ALERT_POLL_INTERVAL_SECONDS,
+        schedule_hour_local=BRAIN_ALERT_SCHEDULE_HOUR_LOCAL,
+    )
+    scheduler.start()
+    app.bot_data[BRAIN_ALERT_SCHEDULER_KEY] = scheduler
 
 
 async def close_http_client(app):
+    scheduler = app.bot_data.pop(BRAIN_ALERT_SCHEDULER_KEY, None)
+    if scheduler is not None:
+        await scheduler.stop()
+
     client = app.bot_data.pop(HTTP_CLIENT_KEY, None)
     if client is not None:
         await client.aclose()
+
+
+async def send_scheduled_brain_alert(app, user_id: int, mode: str) -> bool:
+    client = app.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        return False
+
+    request_id = uuid.uuid4().hex[:12]
+    try:
+        brain_payload = await post_agent_brain(client, payload={}, request_id=request_id)
+    except GatewayClientError as error:
+        logger.warning(
+            "brain_alert_schedule_fetch_failed user_id=%s mode=%s error=%s",
+            user_id,
+            mode,
+            error.code,
+        )
+        return False
+
+    if mode == "notable" and brain_payload.get("has_notable_changes") is not True:
+        return False
+
+    final_message = render_brain_payload(brain_payload)
+    message_chunks = split_telegram_text(final_message)
+    try:
+        await app.bot.send_message(chat_id=user_id, text=message_chunks[0])
+        for chunk in message_chunks[1:]:
+            await app.bot.send_message(chat_id=user_id, text=chunk)
+    except Exception as error:  # pragma: no cover - runtime safety
+        logger.warning(
+            "brain_alert_schedule_telegram_send_failed user_id=%s mode=%s error=%s",
+            user_id,
+            mode,
+            error,
+        )
+        return False
+
+    return True
 
 
 
