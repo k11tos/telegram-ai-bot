@@ -137,6 +137,7 @@ class RuntimeState:
     user_selected_models: dict[int, str] = field(default_factory=dict)
     user_selected_presets: dict[int, str] = field(default_factory=dict)
     user_document_summary_modes: dict[int, str] = field(default_factory=dict)
+    user_brain_alert_modes: dict[int, str] = field(default_factory=dict)
 
 
 runtime_state = RuntimeState()
@@ -153,6 +154,7 @@ user_in_flight_requests = runtime_state.user_in_flight_requests
 user_selected_models = runtime_state.user_selected_models
 user_selected_presets = runtime_state.user_selected_presets
 user_document_summary_modes = runtime_state.user_document_summary_modes
+user_brain_alert_modes = runtime_state.user_brain_alert_modes
 MODEL_RESET_ALIASES = {"default", "reset"}
 
 LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
@@ -202,6 +204,10 @@ SUPPORTED_DOCUMENT_EXTENSIONS_TEXT = ", ".join(SUPPORTED_DOCUMENT_EXTENSIONS)
 MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
 DOCUMENT_SUMMARY_MODES_TEXT = ", ".join(SUPPORTED_DOCUMENT_SUMMARY_MODES)
+DEFAULT_BRAIN_ALERT_MODE = "off"
+SUPPORTED_BRAIN_ALERT_MODES = ("off", "notable", "all")
+BRAIN_ALERT_ON_ALIAS_MODE = "notable"
+BRAIN_ALERT_MODES_TEXT = ", ".join(["on", *SUPPORTED_BRAIN_ALERT_MODES])
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
@@ -212,6 +218,7 @@ HELP_LINES = [
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
     "/brain - 시스템 브리핑 요약",
+    "/brainalert [on|off|notable|all] - 브리핑 알림 모드 확인 또는 변경",
     "/session [name] - 현재 세션 확인 또는 변경",
     "/session_rename <old> <new> - 세션 이름 변경",
     "/session_clear <name> - 세션 기록만 비우기",
@@ -235,6 +242,7 @@ def build_state_payload() -> dict[str, object]:
         runtime_state.user_selected_models,
         runtime_state.user_selected_presets,
         runtime_state.user_document_summary_modes,
+        runtime_state.user_brain_alert_modes,
     )
 
 
@@ -247,6 +255,7 @@ def save_bot_state() -> None:
         runtime_state.user_selected_models,
         runtime_state.user_selected_presets,
         runtime_state.user_document_summary_modes,
+        runtime_state.user_brain_alert_modes,
         logger,
     )
 
@@ -263,6 +272,7 @@ def load_bot_state() -> None:
         normalize_session_name,
         DEFAULT_SESSION_NAME,
         MAX_HISTORY,
+        normalize_brain_alert_mode,
         logger,
     )
 
@@ -276,6 +286,8 @@ def load_bot_state() -> None:
     runtime_state.user_selected_presets.update(loaded_state["selected_presets"])
     runtime_state.user_document_summary_modes.clear()
     runtime_state.user_document_summary_modes.update(loaded_state["document_summary_modes"])
+    runtime_state.user_brain_alert_modes.clear()
+    runtime_state.user_brain_alert_modes.update(loaded_state["brain_alert_modes"])
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
@@ -711,6 +723,49 @@ def normalize_document_summary_mode(mode: str | None) -> str:
 def get_user_document_summary_mode(user_id: int) -> str:
     selected_mode = runtime_state.user_document_summary_modes.get(user_id)
     return normalize_document_summary_mode(selected_mode)
+
+
+def normalize_brain_alert_mode(mode: str | None) -> str:
+    if not isinstance(mode, str):
+        return DEFAULT_BRAIN_ALERT_MODE
+
+    normalized_mode = mode.strip().lower()
+    if normalized_mode == "on":
+        return BRAIN_ALERT_ON_ALIAS_MODE
+    if normalized_mode in SUPPORTED_BRAIN_ALERT_MODES:
+        return normalized_mode
+    return DEFAULT_BRAIN_ALERT_MODE
+
+
+def get_user_brain_alert_mode(user_id: int) -> str:
+    selected_mode = runtime_state.user_brain_alert_modes.get(user_id)
+    return normalize_brain_alert_mode(selected_mode)
+
+
+async def brainalert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    requested_mode = " ".join(context.args).strip().lower() if context.args else ""
+
+    if not requested_mode:
+        current_mode = get_user_brain_alert_mode(user_id)
+        await update.message.reply_text(f"현재 브리핑 알림: {current_mode}")
+        return
+
+    if requested_mode not in {"on", *SUPPORTED_BRAIN_ALERT_MODES}:
+        await update.message.reply_text(
+            "지원하지 않는 브리핑 알림 모드입니다. "
+            f"사용 가능: {BRAIN_ALERT_MODES_TEXT}"
+        )
+        return
+    normalized_requested_mode = normalize_brain_alert_mode(requested_mode)
+
+    lock = get_user_lock(user_id)
+    async with lock:
+        runtime_state.user_brain_alert_modes[user_id] = normalized_requested_mode
+        request_state_save("brainalert_change")
+    await update.message.reply_text(
+        f"브리핑 알림 모드가 변경되었습니다: {normalized_requested_mode}"
+    )
 
 
 async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1600,6 +1655,7 @@ def main():
     app.add_handler(CommandHandler("session_clear", session_clear_command))
     app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
+    app.add_handler(CommandHandler("brainalert", brainalert_command))
     app.add_handler(CommandHandler("docmode", docmode_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(build_supported_document_filter(), handle_document))
