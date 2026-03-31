@@ -93,6 +93,30 @@ def test_brain_alert_scheduler_respects_user_configured_time():
     assert sent_windows[70] == "2026-03-31"
 
 
+def test_brain_alert_scheduler_does_not_resend_after_same_day_time_change():
+    send_alert = AsyncMock(return_value=True)
+    user_id = 71
+    user_modes = {user_id: "all"}
+    user_times = {user_id: "09:00"}
+    sent_windows = {user_id: "2026-03-31"}
+
+    user_times[user_id] = "07:00"
+    scheduler = BrainAlertScheduler(
+        user_brain_alert_modes=user_modes,
+        user_brain_alert_times=user_times,
+        last_sent_windows=sent_windows,
+        send_alert_for_user=send_alert,
+        logger=bot.logger,
+        default_time_local="09:00",
+        now_func=FixedNow(datetime(2026, 3, 31, 10, 0)),
+    )
+
+    asyncio.run(scheduler.run_once())
+
+    send_alert.assert_not_awaited()
+    assert sent_windows[user_id] == "2026-03-31"
+
+
 def test_should_send_brain_alert_respects_notable_and_all_modes():
     notable_payload = {"has_notable_changes": True}
     non_notable_payload = {"has_notable_changes": False}

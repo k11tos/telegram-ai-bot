@@ -268,6 +268,19 @@ def test_brainalert_command_rejects_invalid_time(make_update_context):
     )
 
 
+def test_brainalert_time_change_keeps_existing_sent_window(make_update_context):
+    user_id = 915
+    bot.user_brain_alert_sent_windows[user_id] = "2026-03-31"
+    update, context = make_update_context(
+        user_id=user_id, text="/brainalert time 06:30", client=None, args=["time", "06:30"]
+    )
+
+    asyncio.run(bot.brainalert_command(update, context))
+
+    assert bot.user_brain_alert_times[user_id] == "06:30"
+    assert bot.user_brain_alert_sent_windows[user_id] == "2026-03-31"
+
+
 
 
 def test_health_command_reports_gateway_ready(make_update_context):

@@ -829,7 +829,6 @@ async def brainalert_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         lock = get_user_lock(user_id)
         async with lock:
             runtime_state.user_brain_alert_times[user_id] = requested_time
-            runtime_state.user_brain_alert_sent_windows.pop(user_id, None)
             request_state_save("brainalert_time_change")
         await update.message.reply_text(
             f"브리핑 알림 시간이 변경되었습니다: {requested_time} ({BRAIN_ALERT_TIMEZONE_LABEL})"
