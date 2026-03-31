@@ -128,25 +128,31 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
             current = change.get("current")
             if isinstance(previous, dict) and isinstance(current, dict):
                 prev_running = previous.get("running")
-                prev_restarting = previous.get("restarting")
+                prev_stopped = previous.get("stopped")
+                if not isinstance(prev_stopped, int):
+                    prev_stopped = previous.get("restarting")
                 running = current.get("running")
-                restarting = current.get("restarting")
+                stopped = current.get("stopped")
+                if not isinstance(stopped, int):
+                    stopped = current.get("restarting")
                 if (
                     isinstance(prev_running, int)
-                    and isinstance(prev_restarting, int)
+                    and isinstance(prev_stopped, int)
                     and isinstance(running, int)
-                    and isinstance(restarting, int)
+                    and isinstance(stopped, int)
                 ):
                     docker_summary_line = (
-                        f"도커 요약 변화: 실행 {prev_running}→{running}, 재시작 {prev_restarting}→{restarting}"
+                        f"도커 요약 변화: 실행 {prev_running}→{running}, 중지 {prev_stopped}→{stopped}"
                     )
                 else:
                     docker_summary_line = "도커 요약 변화"
             else:
                 running = change.get("running")
-                restarting = change.get("restarting")
-                if isinstance(running, int) and isinstance(restarting, int):
-                    docker_summary_line = f"도커 요약 변화: 실행 {running}, 재시작 {restarting}"
+                stopped = change.get("stopped")
+                if not isinstance(stopped, int):
+                    stopped = change.get("restarting")
+                if isinstance(running, int) and isinstance(stopped, int):
+                    docker_summary_line = f"도커 요약 변화: 실행 {running}, 중지 {stopped}"
                 else:
                     docker_summary_line = "도커 요약 변화"
             continue
