@@ -30,11 +30,48 @@ def _get_change_type(change: Any) -> str:
     if not isinstance(change, dict):
         return ""
 
-    change_type = change.get("type")
+    change_type = change.get("kind")
+    if not isinstance(change_type, str):
+        change_type = change.get("type")
     if not isinstance(change_type, str):
         return ""
 
     return change_type.strip().lower()
+
+
+def _extract_service_name(field: Any, fallback_service: Any) -> str:
+    if isinstance(field, str) and field.strip():
+        field_name = field.strip()
+        if field_name.startswith("service_states."):
+            service = field_name.removeprefix("service_states.").strip()
+            if service:
+                return service
+
+    if isinstance(fallback_service, str) and fallback_service.strip():
+        return fallback_service.strip()
+
+    return ""
+
+
+def _format_metric_change(field: Any, previous: Any, current: Any, fallback_metric: Any) -> str:
+    metric_labels = {
+        "disk_percent": ("디스크 사용률", "%"),
+        "memory_percent": ("메모리 사용률", "%"),
+        "load_average": ("로드 평균", ""),
+    }
+
+    if isinstance(field, str):
+        normalized_field = field.strip()
+        if normalized_field in metric_labels and isinstance(current, (int, float)):
+            label, unit = metric_labels[normalized_field]
+            if isinstance(previous, (int, float)):
+                return f"{label} {previous:.1f}{unit}→{current:.1f}{unit}"
+            return f"{label} {current:.1f}{unit}"
+
+    if isinstance(fallback_metric, str) and fallback_metric.strip():
+        return fallback_metric.strip()
+
+    return ""
 
 
 def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str]:
@@ -49,50 +86,79 @@ def build_brain_change_lines(has_notable_changes: Any, changes: Any) -> list[str
     has_metric_fallback = False
 
     for change in changes:
+        if not isinstance(change, dict) or change.get("notable") is not True:
+            continue
+
         change_type = _get_change_type(change)
         if not change_type:
             continue
 
         if change_type == "restart_detected":
-            service = change.get("service")
-            if isinstance(service, str) and service.strip():
-                restart_services.append(service.strip())
+            service = _extract_service_name(change.get("field"), change.get("service"))
+            if service:
+                restart_services.append(service)
             else:
                 restart_services.append("")
             continue
 
         if change_type == "service_state_change":
-            service = change.get("service")
-            from_state = change.get("from_state")
-            to_state = change.get("to_state")
+            service = _extract_service_name(change.get("field"), change.get("service"))
+            from_state = change.get("previous")
+            to_state = change.get("current")
+            if not isinstance(from_state, str):
+                from_state = change.get("from_state")
+            if not isinstance(to_state, str):
+                to_state = change.get("to_state")
             if (
-                isinstance(service, str)
-                and service.strip()
+                service
                 and isinstance(from_state, str)
                 and from_state.strip()
                 and isinstance(to_state, str)
                 and to_state.strip()
             ):
                 service_transitions.append(
-                    f"{service.strip()} {from_state.strip()}→{to_state.strip()}"
+                    f"{service} {from_state.strip()}→{to_state.strip()}"
                 )
             else:
                 has_service_state_fallback = True
             continue
 
         if change_type == "docker_summary_change" and docker_summary_line is None:
-            running = change.get("running")
-            restarting = change.get("restarting")
-            if isinstance(running, int) and isinstance(restarting, int):
-                docker_summary_line = f"도커 요약 변화: 실행 {running}, 재시작 {restarting}"
+            previous = change.get("previous")
+            current = change.get("current")
+            if isinstance(previous, dict) and isinstance(current, dict):
+                prev_running = previous.get("running")
+                prev_restarting = previous.get("restarting")
+                running = current.get("running")
+                restarting = current.get("restarting")
+                if (
+                    isinstance(prev_running, int)
+                    and isinstance(prev_restarting, int)
+                    and isinstance(running, int)
+                    and isinstance(restarting, int)
+                ):
+                    docker_summary_line = (
+                        f"도커 요약 변화: 실행 {prev_running}→{running}, 재시작 {prev_restarting}→{restarting}"
+                    )
+                else:
+                    docker_summary_line = "도커 요약 변화"
             else:
-                docker_summary_line = "도커 요약 변화"
+                running = change.get("running")
+                restarting = change.get("restarting")
+                if isinstance(running, int) and isinstance(restarting, int):
+                    docker_summary_line = f"도커 요약 변화: 실행 {running}, 재시작 {restarting}"
+                else:
+                    docker_summary_line = "도커 요약 변화"
             continue
 
         if change_type == "metric_delta":
-            metric = change.get("metric")
-            if isinstance(metric, str) and metric.strip():
-                metric_value = metric.strip()
+            metric_value = _format_metric_change(
+                change.get("field"),
+                change.get("previous"),
+                change.get("current"),
+                change.get("metric"),
+            )
+            if metric_value:
                 if metric_value not in metric_changes:
                     metric_changes.append(metric_value)
             else:
