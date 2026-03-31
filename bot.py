@@ -272,6 +272,7 @@ def load_bot_state() -> None:
         normalize_session_name,
         DEFAULT_SESSION_NAME,
         MAX_HISTORY,
+        normalize_brain_alert_mode,
         logger,
     )
 

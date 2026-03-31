@@ -91,6 +91,7 @@ def load_bot_state(
     normalize_session_name: Callable[[str], str],
     default_session_name: str,
     max_history: int,
+    normalize_brain_alert_mode: Callable[[str | None], str],
     logger: logging.Logger,
 ) -> dict[str, dict[int, object]]:
     loaded_conversations: dict[int, dict[str, list[str]]] = {}
@@ -183,7 +184,10 @@ def load_bot_state(
                     for user_id, raw_mode in normalized_brain_alert_modes.items():
                         if not isinstance(raw_mode, str):
                             continue
-                        normalized_mode = raw_mode.strip().lower()
+                        stripped_mode = raw_mode.strip()
+                        if stripped_mode.lower() not in {"off", "notable", "all", "on"}:
+                            continue
+                        normalized_mode = normalize_brain_alert_mode(stripped_mode)
                         if normalized_mode in {"off", "notable", "all"}:
                             loaded_brain_alert_modes[user_id] = normalized_mode
 
