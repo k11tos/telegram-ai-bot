@@ -101,7 +101,7 @@ jobs:
           SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
         run: |
           set -euo pipefail
-          scp -o IdentitiesOnly=yes -o BatchMode=yes -P "$SSH_PORT" scripts/deploy.sh "$PI_USER@$PI_HOST:/tmp/telegram-ai-bot-deploy.sh"
+          scp -o BatchMode=yes -P "$SSH_PORT" scripts/deploy.sh "$PI_USER@$PI_HOST:/tmp/telegram-ai-bot-deploy.sh"
 
       - name: Resolve deploy runtime metadata
         id: metadata
@@ -141,5 +141,5 @@ jobs:
           printf -v APP_VERSION_Q '%q' "$APP_VERSION"
           printf -v COMMIT_SHA_Q '%q' "$COMMIT_SHA"
 
-          ssh -o IdentitiesOnly=yes -o BatchMode=yes -p "$SSH_PORT" "$PI_USER@$PI_HOST" \
+          ssh -o BatchMode=yes -p "$SSH_PORT" "$PI_USER@$PI_HOST" \
             "chmod +x /tmp/telegram-ai-bot-deploy.sh && APP_DIR=$APP_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q APP_VERSION=$APP_VERSION_Q COMMIT_SHA=$COMMIT_SHA_Q bash /tmp/telegram-ai-bot-deploy.sh"
