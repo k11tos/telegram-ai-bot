@@ -1,2 +1,5 @@
 .env
 __pycache__
+
+# Codex CLI local artifact
+.codex
