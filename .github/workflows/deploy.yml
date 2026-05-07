@@ -41,7 +41,6 @@ jobs:
           PI_HOST: ${{ secrets.PI_HOST }}
           PI_USER: ${{ secrets.PI_USER }}
           PI_SSH_KEY: ${{ secrets.PI_SSH_KEY }}
-          PI_PORT: ${{ secrets.PI_PORT }}
           BOT_APP_DIR: ${{ secrets.BOT_APP_DIR }}
         run: |
           set -euo pipefail
@@ -68,15 +67,25 @@ jobs:
             exit 1
           fi
 
-          resolved_port="${PI_PORT:-22}"
-
           {
             echo "app_dir=$resolved_app_dir"
             echo "service_name=${INPUT_SERVICE_NAME:-telegram-bot}"
             echo "branch=${INPUT_BRANCH:-main}"
             echo "startup_wait_seconds=${INPUT_STARTUP_WAIT_SECONDS:-3}"
-            echo "ssh_port=$resolved_port"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Tailscale diagnostics
+        run: |
+          set -euo pipefail
+          tailscale status
+          tailscale ip -4
 
       - name: Load SSH key
         uses: webfactory/ssh-agent@v0.10.0
@@ -87,22 +96,20 @@ jobs:
       - name: Configure SSH known_hosts
         env:
           PI_HOST: ${{ secrets.PI_HOST }}
-          SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          ssh-keyscan -p "$SSH_PORT" -H "$PI_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$PI_HOST" >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
       - name: Copy deploy script to Raspberry Pi
         env:
           PI_HOST: ${{ secrets.PI_HOST }}
           PI_USER: ${{ secrets.PI_USER }}
-          SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
         run: |
           set -euo pipefail
-          scp -o BatchMode=yes -P "$SSH_PORT" scripts/deploy.sh "$PI_USER@$PI_HOST:/tmp/telegram-ai-bot-deploy.sh"
+          scp -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 scripts/deploy.sh "$PI_USER@$PI_HOST:/tmp/telegram-ai-bot-deploy.sh"
 
       - name: Resolve deploy runtime metadata
         id: metadata
@@ -126,8 +133,7 @@ jobs:
         env:
           PI_HOST: ${{ secrets.PI_HOST }}
           PI_USER: ${{ secrets.PI_USER }}
-          SSH_PORT: ${{ steps.validate.outputs.ssh_port }}
-          APP_DIR: ${{ steps.validate.outputs.app_dir }}
+          TARGET_DIR: ${{ steps.validate.outputs.app_dir }}
           SERVICE_NAME: ${{ steps.validate.outputs.service_name }}
           BRANCH: ${{ steps.validate.outputs.branch }}
           STARTUP_WAIT_SECONDS: ${{ steps.validate.outputs.startup_wait_seconds }}
@@ -135,12 +141,42 @@ jobs:
           COMMIT_SHA: ${{ steps.metadata.outputs.full_sha }}
         run: |
           set -euo pipefail
-          printf -v APP_DIR_Q '%q' "$APP_DIR"
+          printf -v TARGET_DIR_Q '%q' "$TARGET_DIR"
           printf -v SERVICE_NAME_Q '%q' "$SERVICE_NAME"
           printf -v BRANCH_Q '%q' "$BRANCH"
           printf -v STARTUP_WAIT_SECONDS_Q '%q' "$STARTUP_WAIT_SECONDS"
           printf -v APP_VERSION_Q '%q' "$APP_VERSION"
           printf -v COMMIT_SHA_Q '%q' "$COMMIT_SHA"
 
-          ssh -o BatchMode=yes -p "$SSH_PORT" "$PI_USER@$PI_HOST" \
-            "chmod +x /tmp/telegram-ai-bot-deploy.sh && APP_DIR=$APP_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q APP_VERSION=$APP_VERSION_Q COMMIT_SHA=$COMMIT_SHA_Q bash /tmp/telegram-ai-bot-deploy.sh"
+          timeout 10m ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$PI_USER@$PI_HOST"             TARGET_DIR=$TARGET_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q APP_VERSION=$APP_VERSION_Q COMMIT_SHA=$COMMIT_SHA_Q 'bash -s' <<'REMOTE_EOF'
+          set -euo pipefail
+
+          RAW_TARGET_DIR="$TARGET_DIR"
+          NORMALIZED_TARGET_DIR="$TARGET_DIR"
+          if [[ "$NORMALIZED_TARGET_DIR" == "~" ]]; then
+            NORMALIZED_TARGET_DIR="$HOME"
+          elif [[ "$NORMALIZED_TARGET_DIR" == ~/* ]]; then
+            NORMALIZED_TARGET_DIR="$HOME/${NORMALIZED_TARGET_DIR#~/}"
+          fi
+
+          RAW_TARGET_DIR_ESC="$(printf '%s' "$RAW_TARGET_DIR" | sed -e 's/[\/&]/\\&/g')"
+          NORMALIZED_TARGET_DIR_ESC="$(printf '%s' "$NORMALIZED_TARGET_DIR" | sed -e 's/[\/&]/\\&/g')"
+
+          {
+            test -d "$NORMALIZED_TARGET_DIR" || { echo "Deployment target directory is missing"; exit 1; }
+            cd "$NORMALIZED_TARGET_DIR"
+            test -d .git || { echo "Deployment target is not a git repository"; exit 1; }
+            echo "Git deployment target verified"
+
+            chmod +x /tmp/telegram-ai-bot-deploy.sh
+            APP_DIR="$NORMALIZED_TARGET_DIR"               SERVICE_NAME="$SERVICE_NAME"               BRANCH="$BRANCH"               STARTUP_WAIT_SECONDS="$STARTUP_WAIT_SECONDS"               APP_VERSION="$APP_VERSION"               COMMIT_SHA="$COMMIT_SHA"               bash /tmp/telegram-ai-bot-deploy.sh
+
+            if command -v docker >/dev/null 2>&1; then
+              docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+            else
+              echo "Docker is not installed; skipping container status"
+            fi
+          } 2>&1 | sed -e "s/${RAW_TARGET_DIR_ESC}/[TARGET_DIR]/g" -e "s/${NORMALIZED_TARGET_DIR_ESC}/[TARGET_DIR]/g"
+
+          exit ${PIPESTATUS[0]}
+          REMOTE_EOF
