@@ -148,6 +148,35 @@ jobs:
           printf -v APP_VERSION_Q '%q' "$APP_VERSION"
           printf -v COMMIT_SHA_Q '%q' "$COMMIT_SHA"
 
-          TARGET_DIR_SED="$(printf '%s' "$TARGET_DIR" | sed -e 's/[\/&]/\\&/g')"
+          timeout 10m ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$PI_USER@$PI_HOST"             TARGET_DIR=$TARGET_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q APP_VERSION=$APP_VERSION_Q COMMIT_SHA=$COMMIT_SHA_Q 'bash -s' <<'REMOTE_EOF'
+          set -euo pipefail
 
-          timeout 10m ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$PI_USER@$PI_HOST"             "set -euo pipefail; test -d $TARGET_DIR_Q || { echo 'Deployment target directory is missing'; exit 1; }; cd $TARGET_DIR_Q; test -d .git || { echo 'Deployment target is not a git repository'; exit 1; }; echo 'Git deployment target verified'; chmod +x /tmp/telegram-ai-bot-deploy.sh; APP_DIR=$TARGET_DIR_Q SERVICE_NAME=$SERVICE_NAME_Q BRANCH=$BRANCH_Q STARTUP_WAIT_SECONDS=$STARTUP_WAIT_SECONDS_Q APP_VERSION=$APP_VERSION_Q COMMIT_SHA=$COMMIT_SHA_Q bash /tmp/telegram-ai-bot-deploy.sh; if command -v docker >/dev/null 2>&1; then docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true; else echo 'Docker is not installed; skipping container status'; fi"             2>&1 | sed "s/${TARGET_DIR_SED}/[TARGET_DIR]/g"
+          RAW_TARGET_DIR="$TARGET_DIR"
+          NORMALIZED_TARGET_DIR="$TARGET_DIR"
+          if [[ "$NORMALIZED_TARGET_DIR" == "~" ]]; then
+            NORMALIZED_TARGET_DIR="$HOME"
+          elif [[ "$NORMALIZED_TARGET_DIR" == ~/* ]]; then
+            NORMALIZED_TARGET_DIR="$HOME/${NORMALIZED_TARGET_DIR#~/}"
+          fi
+
+          RAW_TARGET_DIR_ESC="$(printf '%s' "$RAW_TARGET_DIR" | sed -e 's/[\/&]/\\&/g')"
+          NORMALIZED_TARGET_DIR_ESC="$(printf '%s' "$NORMALIZED_TARGET_DIR" | sed -e 's/[\/&]/\\&/g')"
+
+          {
+            test -d "$NORMALIZED_TARGET_DIR" || { echo "Deployment target directory is missing"; exit 1; }
+            cd "$NORMALIZED_TARGET_DIR"
+            test -d .git || { echo "Deployment target is not a git repository"; exit 1; }
+            echo "Git deployment target verified"
+
+            chmod +x /tmp/telegram-ai-bot-deploy.sh
+            APP_DIR="$NORMALIZED_TARGET_DIR"               SERVICE_NAME="$SERVICE_NAME"               BRANCH="$BRANCH"               STARTUP_WAIT_SECONDS="$STARTUP_WAIT_SECONDS"               APP_VERSION="$APP_VERSION"               COMMIT_SHA="$COMMIT_SHA"               bash /tmp/telegram-ai-bot-deploy.sh
+
+            if command -v docker >/dev/null 2>&1; then
+              docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+            else
+              echo "Docker is not installed; skipping container status"
+            fi
+          } 2>&1 | sed -e "s/${RAW_TARGET_DIR_ESC}/[TARGET_DIR]/g" -e "s/${NORMALIZED_TARGET_DIR_ESC}/[TARGET_DIR]/g"
+
+          exit ${PIPESTATUS[0]}
+          REMOTE_EOF
