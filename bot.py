@@ -9,13 +9,6 @@ import time
 import uuid
 
 import httpx
-from brain_alert_scheduler import (
-    BrainAlertScheduler,
-    DEFAULT_BRAIN_ALERT_POLL_INTERVAL_SECONDS,
-    DEFAULT_BRAIN_ALERT_SCHEDULE_HOUR_LOCAL,
-    is_valid_brain_alert_time_text,
-)
-from brain_formatter import render_brain_payload
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -28,7 +21,6 @@ from telegram.ext import (
 
 from commands.ops import (
     OperationalCommandDependencies,
-    brain_command,
     configure_operational_dependencies,
     health_command,
     help_command,
@@ -49,10 +41,7 @@ from document_summary import (
     summarize_document_text,
 )
 from gateway_client import (
-    AI_GATEWAY_AGENT_BRAIN_PATH,
-    GatewayClientError,
     extract_model_names,
-    post_agent_brain,
 )
 from preset_catalog import (
     PRESET_DESCRIPTION_FIELD,
@@ -144,9 +133,6 @@ class RuntimeState:
     user_selected_models: dict[int, str] = field(default_factory=dict)
     user_selected_presets: dict[int, str] = field(default_factory=dict)
     user_document_summary_modes: dict[int, str] = field(default_factory=dict)
-    user_brain_alert_modes: dict[int, str] = field(default_factory=dict)
-    user_brain_alert_times: dict[int, str] = field(default_factory=dict)
-    user_brain_alert_sent_windows: dict[int, str] = field(default_factory=dict)
 
 
 runtime_state = RuntimeState()
@@ -163,9 +149,6 @@ user_in_flight_requests = runtime_state.user_in_flight_requests
 user_selected_models = runtime_state.user_selected_models
 user_selected_presets = runtime_state.user_selected_presets
 user_document_summary_modes = runtime_state.user_document_summary_modes
-user_brain_alert_modes = runtime_state.user_brain_alert_modes
-user_brain_alert_times = runtime_state.user_brain_alert_times
-user_brain_alert_sent_windows = runtime_state.user_brain_alert_sent_windows
 MODEL_RESET_ALIASES = {"default", "reset"}
 
 LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
@@ -214,26 +197,8 @@ SUPPORTED_DOCUMENT_EXTENSIONS = (
 SUPPORTED_DOCUMENT_EXTENSIONS_TEXT = ", ".join(SUPPORTED_DOCUMENT_EXTENSIONS)
 MAX_DOCUMENT_BYTES = int(os.getenv("MAX_DOCUMENT_BYTES", "200000"))
 MAX_DOCUMENT_PROMPT_CHARS = int(os.getenv("MAX_DOCUMENT_PROMPT_CHARS", "20000"))
-BRAIN_ALERT_POLL_INTERVAL_SECONDS = float(
-    os.getenv(
-        "BRAIN_ALERT_POLL_INTERVAL_SECONDS",
-        str(DEFAULT_BRAIN_ALERT_POLL_INTERVAL_SECONDS),
-    )
-)
-BRAIN_ALERT_SCHEDULE_HOUR_LOCAL = int(
-    os.getenv(
-        "BRAIN_ALERT_SCHEDULE_HOUR_LOCAL",
-        str(DEFAULT_BRAIN_ALERT_SCHEDULE_HOUR_LOCAL),
-    )
-)
-BRAIN_ALERT_SCHEDULER_KEY = "brain_alert_scheduler"
-DEFAULT_BRAIN_ALERT_TIME_LOCAL = f"{BRAIN_ALERT_SCHEDULE_HOUR_LOCAL:02d}:00"
-BRAIN_ALERT_TIMEZONE_LABEL = os.getenv("BRAIN_ALERT_TIMEZONE_LABEL", "server local time")
 DOCUMENT_SUMMARY_MODES_TEXT = ", ".join(SUPPORTED_DOCUMENT_SUMMARY_MODES)
-DEFAULT_BRAIN_ALERT_MODE = "off"
-SUPPORTED_BRAIN_ALERT_MODES = ("off", "notable", "all")
-BRAIN_ALERT_ON_ALIAS_MODE = "notable"
-BRAIN_ALERT_MODES_TEXT = ", ".join(["on", *SUPPORTED_BRAIN_ALERT_MODES])
+
 HELP_LINES = [
     "사용 가능한 명령어",
     "/help - 명령어 안내",
@@ -243,8 +208,6 @@ HELP_LINES = [
     "/reload_presets - 게이트웨이 프리셋 다시 불러오기",
     "/models - 사용 가능한 모델 목록",
     "/health - AI 게이트웨이 준비 상태 확인",
-    "/brain - 시스템 브리핑 요약",
-    "/brainalert [on|off|notable|all|time HH:MM] - 브리핑 알림 모드/시간 확인 또는 변경",
     "/session [name] - 현재 세션 확인 또는 변경",
     "/session_rename <old> <new> - 세션 이름 변경",
     "/session_clear <name> - 세션 기록만 비우기",
@@ -268,8 +231,6 @@ def build_state_payload() -> dict[str, object]:
         runtime_state.user_selected_models,
         runtime_state.user_selected_presets,
         runtime_state.user_document_summary_modes,
-        runtime_state.user_brain_alert_modes,
-        runtime_state.user_brain_alert_times,
     )
 
 
@@ -282,8 +243,6 @@ def save_bot_state() -> None:
         runtime_state.user_selected_models,
         runtime_state.user_selected_presets,
         runtime_state.user_document_summary_modes,
-        runtime_state.user_brain_alert_modes,
-        runtime_state.user_brain_alert_times,
         logger,
     )
 
@@ -300,7 +259,6 @@ def load_bot_state() -> None:
         normalize_session_name,
         DEFAULT_SESSION_NAME,
         MAX_HISTORY,
-        normalize_brain_alert_mode,
         logger,
     )
 
@@ -314,11 +272,6 @@ def load_bot_state() -> None:
     runtime_state.user_selected_presets.update(loaded_state["selected_presets"])
     runtime_state.user_document_summary_modes.clear()
     runtime_state.user_document_summary_modes.update(loaded_state["document_summary_modes"])
-    runtime_state.user_brain_alert_modes.clear()
-    runtime_state.user_brain_alert_modes.update(loaded_state["brain_alert_modes"])
-    runtime_state.user_brain_alert_times.clear()
-    runtime_state.user_brain_alert_times.update(loaded_state["brain_alert_times"])
-    runtime_state.user_brain_alert_sent_windows.clear()
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
@@ -754,102 +707,6 @@ def normalize_document_summary_mode(mode: str | None) -> str:
 def get_user_document_summary_mode(user_id: int) -> str:
     selected_mode = runtime_state.user_document_summary_modes.get(user_id)
     return normalize_document_summary_mode(selected_mode)
-
-
-def normalize_brain_alert_mode(mode: str | None) -> str:
-    if not isinstance(mode, str):
-        return DEFAULT_BRAIN_ALERT_MODE
-
-    normalized_mode = mode.strip().lower()
-    if normalized_mode == "on":
-        return BRAIN_ALERT_ON_ALIAS_MODE
-    if normalized_mode in SUPPORTED_BRAIN_ALERT_MODES:
-        return normalized_mode
-    return DEFAULT_BRAIN_ALERT_MODE
-
-
-def get_user_brain_alert_mode(user_id: int) -> str:
-    selected_mode = runtime_state.user_brain_alert_modes.get(user_id)
-    return normalize_brain_alert_mode(selected_mode)
-
-
-def get_user_brain_alert_time(user_id: int) -> str:
-    selected_time = runtime_state.user_brain_alert_times.get(user_id)
-    if not isinstance(selected_time, str):
-        return DEFAULT_BRAIN_ALERT_TIME_LOCAL
-    normalized_time = selected_time.strip()
-    if is_valid_brain_alert_time_text(normalized_time):
-        return normalized_time
-    return DEFAULT_BRAIN_ALERT_TIME_LOCAL
-
-
-def should_send_brain_alert(mode: str, brain_payload: dict | None) -> bool:
-    normalized_mode = normalize_brain_alert_mode(mode)
-    if normalized_mode == "off":
-        return False
-    if normalized_mode == "all":
-        return True
-    if normalized_mode == "notable":
-        if not isinstance(brain_payload, dict):
-            return False
-        return brain_payload.get("has_notable_changes") is True
-    return False
-
-
-def build_scheduled_brain_alert_message(brain_payload: dict | None) -> str:
-    automatic_prefix = "⏰ 자동 브레인 브리핑"
-    return f"{automatic_prefix}\n\n{render_brain_payload(brain_payload)}"
-
-
-async def brainalert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    requested_mode = " ".join(context.args).strip().lower() if context.args else ""
-
-    if not requested_mode:
-        current_mode = get_user_brain_alert_mode(user_id)
-        current_time = get_user_brain_alert_time(user_id)
-        await update.message.reply_text(
-            f"현재 브리핑 알림 모드: {current_mode}\n"
-            f"현재 브리핑 알림 시간: {current_time} ({BRAIN_ALERT_TIMEZONE_LABEL})"
-        )
-        return
-
-    if context.args and context.args[0].lower() == "time":
-        if len(context.args) != 2:
-            await update.message.reply_text("시간 설정 형식: /brainalert time HH:MM")
-            return
-
-        requested_time = context.args[1].strip()
-        if not is_valid_brain_alert_time_text(requested_time):
-            await update.message.reply_text(
-                "지원하지 않는 시간 형식입니다. HH:MM(24시간제)로 입력해 주세요."
-            )
-            return
-
-        lock = get_user_lock(user_id)
-        async with lock:
-            runtime_state.user_brain_alert_times[user_id] = requested_time
-            request_state_save("brainalert_time_change")
-        await update.message.reply_text(
-            f"브리핑 알림 시간이 변경되었습니다: {requested_time} ({BRAIN_ALERT_TIMEZONE_LABEL})"
-        )
-        return
-
-    if requested_mode not in {"on", *SUPPORTED_BRAIN_ALERT_MODES}:
-        await update.message.reply_text(
-            "지원하지 않는 브리핑 알림 모드입니다. "
-            f"사용 가능: {BRAIN_ALERT_MODES_TEXT}"
-        )
-        return
-    normalized_requested_mode = normalize_brain_alert_mode(requested_mode)
-
-    lock = get_user_lock(user_id)
-    async with lock:
-        runtime_state.user_brain_alert_modes[user_id] = normalized_requested_mode
-        request_state_save("brainalert_change")
-    await update.message.reply_text(
-        f"브리핑 알림 모드가 변경되었습니다: {normalized_requested_mode}"
-    )
 
 
 async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1679,77 +1536,12 @@ async def init_http_client(app):
         limits=limits,
     )
     await load_gateway_presets(app)
-    scheduler = BrainAlertScheduler(
-        user_brain_alert_modes=runtime_state.user_brain_alert_modes,
-        user_brain_alert_times=runtime_state.user_brain_alert_times,
-        last_sent_windows=runtime_state.user_brain_alert_sent_windows,
-        send_alert_for_user=lambda user_id, mode: send_scheduled_brain_alert(
-            app, user_id, mode
-        ),
-        logger=logger,
-        poll_interval_seconds=BRAIN_ALERT_POLL_INTERVAL_SECONDS,
-        default_time_local=DEFAULT_BRAIN_ALERT_TIME_LOCAL,
-    )
-    scheduler.start()
-    app.bot_data[BRAIN_ALERT_SCHEDULER_KEY] = scheduler
 
 
 async def close_http_client(app):
-    scheduler = app.bot_data.pop(BRAIN_ALERT_SCHEDULER_KEY, None)
-    if scheduler is not None:
-        await scheduler.stop()
-
     client = app.bot_data.pop(HTTP_CLIENT_KEY, None)
     if client is not None:
         await client.aclose()
-
-
-async def send_scheduled_brain_alert(app, user_id: int, mode: str) -> bool:
-    client = app.bot_data.get(HTTP_CLIENT_KEY)
-    if client is None:
-        return False
-
-    request_id = uuid.uuid4().hex[:12]
-    try:
-        brain_payload = await post_agent_brain(client, payload={}, request_id=request_id)
-    except GatewayClientError as error:
-        logger.warning(
-            "brain_alert_schedule_fetch_failed user_id=%s mode=%s error=%s",
-            user_id,
-            mode,
-            error.code,
-        )
-        return False
-
-    if not should_send_brain_alert(mode, brain_payload):
-        return False
-
-    final_message = build_scheduled_brain_alert_message(brain_payload)
-    message_chunks = split_telegram_text(final_message)
-    try:
-        await app.bot.send_message(chat_id=user_id, text=message_chunks[0])
-        for chunk in message_chunks[1:]:
-            await app.bot.send_message(chat_id=user_id, text=chunk)
-    except Exception as error:  # pragma: no cover - runtime safety
-        logger.warning(
-            "brain_alert_schedule_telegram_send_failed user_id=%s mode=%s error=%s",
-            user_id,
-            mode,
-            error,
-        )
-        return False
-
-    return True
-
-
-
-
-async def _post_agent_brain_bridge(
-    client: httpx.AsyncClient,
-    payload: dict,
-    request_id: str | None = None,
-) -> dict:
-    return await post_agent_brain(client, payload=payload, request_id=request_id)
 
 
 configure_operational_dependencies(
@@ -1762,8 +1554,6 @@ configure_operational_dependencies(
         logger=logger,
         http_client_key=HTTP_CLIENT_KEY,
         ai_gateway_ready_path=AI_GATEWAY_READY_PATH,
-        post_agent_brain=_post_agent_brain_bridge,
-        split_telegram_text=split_telegram_text,
         ai_gateway_models_path=AI_GATEWAY_MODELS_PATH,
         extract_model_names=extract_model_names,
     )
@@ -1794,7 +1584,6 @@ def main():
     app.add_handler(CommandHandler("session_clear", session_clear_command))
     app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
-    app.add_handler(CommandHandler("brainalert", brainalert_command))
     app.add_handler(CommandHandler("docmode", docmode_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(build_supported_document_filter(), handle_document))

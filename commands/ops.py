@@ -7,8 +7,6 @@ import httpx
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
-from brain_formatter import render_brain_payload
-from gateway_client import GatewayClientError
 
 
 @dataclass(frozen=True)
@@ -21,8 +19,6 @@ class OperationalCommandDependencies:
     logger: object
     http_client_key: str
     ai_gateway_ready_path: str
-    post_agent_brain: Callable[..., Awaitable[dict]]
-    split_telegram_text: Callable[[str], list[str]]
     ai_gateway_models_path: str
     extract_model_names: Callable[[object], list[str]]
 
@@ -117,76 +113,6 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("게이트웨이가 정상적으로 준비되어 있어요.")
 
 
-async def brain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dependencies = _get_operational_dependencies()
-
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id if update.effective_chat else None
-    request_id = uuid.uuid4().hex[:12]
-
-    client = context.application.bot_data.get(dependencies.http_client_key)
-    if client is None:
-        dependencies.logger.warning(
-            "brain_gateway_client_missing request_id=%s user_id=%s chat_id=%s",
-            request_id,
-            user_id,
-            chat_id,
-        )
-        await update.message.reply_text("gateway에 연결하지 못했습니다.")
-        return
-
-    try:
-        brain_payload = await dependencies.post_agent_brain(
-            client,
-            payload={},
-            request_id=request_id,
-        )
-    except GatewayClientError as error:
-        if error.code == "agent_brain_timeout":
-            dependencies.logger.warning(
-                "brain_gateway_timeout request_id=%s user_id=%s chat_id=%s",
-                request_id,
-                user_id,
-                chat_id,
-            )
-            fallback_message = "brain 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요."
-        elif error.code == "agent_brain_connect_error":
-            dependencies.logger.warning(
-                "brain_gateway_connect_error request_id=%s user_id=%s chat_id=%s",
-                request_id,
-                user_id,
-                chat_id,
-            )
-            fallback_message = "gateway에 연결하지 못했습니다."
-        elif error.code in {"agent_brain_invalid_json", "agent_brain_malformed_response"}:
-            dependencies.logger.warning(
-                "brain_gateway_malformed_response request_id=%s user_id=%s chat_id=%s error=%s",
-                request_id,
-                user_id,
-                chat_id,
-                error.code,
-            )
-            fallback_message = "brain 응답 형식을 처리하지 못했습니다."
-        else:
-            dependencies.logger.warning(
-                "brain_command_failed request_id=%s user_id=%s chat_id=%s error=%s",
-                request_id,
-                user_id,
-                chat_id,
-                error.code,
-            )
-            fallback_message = "gateway에 연결하지 못했습니다."
-
-        await update.message.reply_text(fallback_message)
-        return
-
-    final_message = render_brain_payload(brain_payload)
-    message_chunks = dependencies.split_telegram_text(final_message)
-    await update.message.reply_text(message_chunks[0])
-    for chunk in message_chunks[1:]:
-        await update.message.reply_text(chunk)
-
-
 async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dependencies = _get_operational_dependencies()
 
@@ -251,6 +177,5 @@ def register_operational_handlers(app):
     app.add_handler(CommandHandler("reload_presets", reload_presets_command))
     app.add_handler(CommandHandler("models", models_command))
     app.add_handler(CommandHandler("health", health_command))
-    app.add_handler(CommandHandler("brain", brain_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("version", version_command))

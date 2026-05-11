@@ -4,7 +4,6 @@ import json
 import httpx
 
 import bot
-import brain_formatter
 
 
 def test_reset_command_clears_conversation_and_replies(make_update_context):
@@ -36,8 +35,6 @@ def test_help_command_replies_with_supported_commands(make_update_context):
     assert "/status" in reply
     assert "/version" in reply
     assert "/health" in reply
-    assert "/brain" in reply
-    assert "/brainalert" in reply
     assert "/session" in reply
     assert "/docmode" in reply
 
@@ -182,107 +179,6 @@ def test_docmode_command_handles_invalid_mode(make_update_context):
     )
 
 
-def test_brainalert_command_shows_default_mode_when_unset(make_update_context):
-    user_id = 910
-    update, context = make_update_context(
-        user_id=user_id, text="/brainalert", client=None, args=[]
-    )
-
-    asyncio.run(bot.brainalert_command(update, context))
-
-    assert update.message.replies[-1] == (
-        f"현재 브리핑 알림 모드: off\n"
-        f"현재 브리핑 알림 시간: {bot.DEFAULT_BRAIN_ALERT_TIME_LOCAL} ({bot.BRAIN_ALERT_TIMEZONE_LABEL})"
-    )
-
-
-def test_brainalert_command_switches_modes_and_supports_on_alias(make_update_context):
-    user_id = 911
-
-    on_update, on_context = make_update_context(
-        user_id=user_id, text="/brainalert on", client=None, args=["on"]
-    )
-    asyncio.run(bot.brainalert_command(on_update, on_context))
-    assert bot.user_brain_alert_modes[user_id] == "notable"
-    assert on_update.message.replies[-1] == "브리핑 알림 모드가 변경되었습니다: notable"
-
-    all_update, all_context = make_update_context(
-        user_id=user_id, text="/brainalert all", client=None, args=["all"]
-    )
-    asyncio.run(bot.brainalert_command(all_update, all_context))
-    assert bot.user_brain_alert_modes[user_id] == "all"
-    assert all_update.message.replies[-1] == "브리핑 알림 모드가 변경되었습니다: all"
-
-    off_update, off_context = make_update_context(
-        user_id=user_id, text="/brainalert off", client=None, args=["off"]
-    )
-    asyncio.run(bot.brainalert_command(off_update, off_context))
-    assert bot.user_brain_alert_modes[user_id] == "off"
-    assert off_update.message.replies[-1] == "브리핑 알림 모드가 변경되었습니다: off"
-
-
-def test_brainalert_command_handles_invalid_mode(make_update_context):
-    user_id = 912
-    update, context = make_update_context(
-        user_id=user_id, text="/brainalert unknown", client=None, args=["unknown"]
-    )
-
-    asyncio.run(bot.brainalert_command(update, context))
-
-    assert user_id not in bot.user_brain_alert_modes
-    assert update.message.replies[-1] == (
-        "지원하지 않는 브리핑 알림 모드입니다. "
-        f"사용 가능: {bot.BRAIN_ALERT_MODES_TEXT}"
-    )
-
-
-def test_get_user_brain_alert_time_defaults_when_unset():
-    assert bot.get_user_brain_alert_time(999) == bot.DEFAULT_BRAIN_ALERT_TIME_LOCAL
-
-
-def test_brainalert_command_sets_valid_time(make_update_context):
-    user_id = 913
-    update, context = make_update_context(
-        user_id=user_id, text="/brainalert time 07:00", client=None, args=["time", "07:00"]
-    )
-
-    asyncio.run(bot.brainalert_command(update, context))
-
-    assert bot.user_brain_alert_times[user_id] == "07:00"
-    assert update.message.replies[-1] == (
-        f"브리핑 알림 시간이 변경되었습니다: 07:00 ({bot.BRAIN_ALERT_TIMEZONE_LABEL})"
-    )
-
-
-def test_brainalert_command_rejects_invalid_time(make_update_context):
-    user_id = 914
-    update, context = make_update_context(
-        user_id=user_id, text="/brainalert time 7:99", client=None, args=["time", "7:99"]
-    )
-
-    asyncio.run(bot.brainalert_command(update, context))
-
-    assert user_id not in bot.user_brain_alert_times
-    assert update.message.replies[-1] == (
-        "지원하지 않는 시간 형식입니다. HH:MM(24시간제)로 입력해 주세요."
-    )
-
-
-def test_brainalert_time_change_keeps_existing_sent_window(make_update_context):
-    user_id = 915
-    bot.user_brain_alert_sent_windows[user_id] = "2026-03-31"
-    update, context = make_update_context(
-        user_id=user_id, text="/brainalert time 06:30", client=None, args=["time", "06:30"]
-    )
-
-    asyncio.run(bot.brainalert_command(update, context))
-
-    assert bot.user_brain_alert_times[user_id] == "06:30"
-    assert bot.user_brain_alert_sent_windows[user_id] == "2026-03-31"
-
-
-
-
 def test_health_command_reports_gateway_ready(make_update_context):
     client = FakeModelsClient(payload={"ok": True})
     update, context = make_update_context(text="/health", client=client)
@@ -334,168 +230,6 @@ def test_health_command_handles_missing_client(make_update_context):
     asyncio.run(bot.health_command(update, context))
 
     assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
-
-
-def test_brain_command_maps_ok_status_to_human_readable_korean(make_update_context):
-    client = FakeModelsClient(
-        post_payload={
-            "overall_status": "ok",
-            "message_lines": ["ai-gateway 정상", "디스크 사용률 71.2%", "메모리 사용률 53.4%"],
-        }
-    )
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert len(client.post_calls) == 1
-    assert client.post_calls[0]["path"] == bot.AI_GATEWAY_AGENT_BRAIN_PATH
-    assert client.post_calls[0]["json"] == {}
-    assert "X-Request-Id" in client.post_calls[0]["headers"]
-    assert isinstance(client.post_calls[0]["headers"]["X-Request-Id"], str)
-    assert client.post_calls[0]["headers"]["X-Request-Id"]
-    assert update.message.replies[-1] == (
-        "📊 오늘 브리핑\n"
-        "\n"
-        "[서버]\n"
-        "- ai-gateway 정상\n"
-        "- 디스크 사용률 71.2%\n"
-        "- 메모리 사용률 53.4%\n"
-        "\n"
-        "[상태]\n"
-        "✅ 안정"
-    )
-
-
-def test_brain_command_maps_partial_status_to_human_readable_korean(make_update_context):
-    client = FakeModelsClient(
-        post_payload={
-            "overall_status": "partial",
-            "message_lines": ["ai-gateway 정상"],
-        }
-    )
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert update.message.replies[-1] == (
-        "📊 오늘 브리핑\n"
-        "\n"
-        "[서버]\n"
-        "- ai-gateway 정상\n"
-        "\n"
-        "[상태]\n"
-        "⚠️ 일부 정보 누락"
-    )
-
-
-def test_brain_command_falls_back_for_unknown_or_missing_status(make_update_context):
-    unknown_client = FakeModelsClient(post_payload={"overall_status": "weird", "message_lines": ["ai-gateway 정상"]})
-    unknown_update, unknown_context = make_update_context(text="/brain", client=unknown_client)
-
-    asyncio.run(bot.brain_command(unknown_update, unknown_context))
-
-    assert unknown_update.message.replies[-1].endswith("⚠️ 일부 정보 확인 불가")
-
-    missing_client = FakeModelsClient(post_payload={"message_lines": ["ai-gateway 정상"]})
-    missing_update, missing_context = make_update_context(text="/brain", client=missing_client)
-
-    asyncio.run(bot.brain_command(missing_update, missing_context))
-
-    assert missing_update.message.replies[-1].endswith("⚠️ 일부 정보 확인 불가")
-
-
-
-def test_brain_command_maps_warning_status_to_human_readable_korean(make_update_context):
-    client = FakeModelsClient(
-        post_payload={
-            "overall_status": "warning",
-            "message_lines": ["디스크 사용률 92.1%"],
-        }
-    )
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert update.message.replies[-1] == (
-        "📊 오늘 브리핑\n"
-        "\n"
-        "[서버]\n"
-        "- 디스크 사용률 92.1%\n"
-        "\n"
-        "[상태]\n"
-        "🚨 점검 필요"
-    )
-
-
-def test_brain_command_uses_fallback_message_when_lines_missing_or_empty(make_update_context):
-    missing_client = FakeModelsClient(post_payload={"overall_status": "ok"})
-    missing_update, missing_context = make_update_context(text="/brain", client=missing_client)
-
-    asyncio.run(bot.brain_command(missing_update, missing_context))
-
-    assert "- 브리핑 세부 정보가 아직 없어요." in missing_update.message.replies[-1]
-
-    empty_client = FakeModelsClient(post_payload={"overall_status": "ok", "message_lines": [" ", None]})
-    empty_update, empty_context = make_update_context(text="/brain", client=empty_client)
-
-    asyncio.run(bot.brain_command(empty_update, empty_context))
-
-    assert "- 브리핑 세부 정보가 아직 없어요." in empty_update.message.replies[-1]
-
-def test_brain_command_handles_missing_client(make_update_context):
-    update, context = make_update_context(text="/brain", client=None)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert update.message.replies[-1] == "gateway에 연결하지 못했습니다."
-
-
-def test_brain_command_handles_gateway_connection_failure(make_update_context):
-    request = httpx.Request("POST", "http://test/agent/brain")
-    client = FakeModelsClient(post_error=httpx.ConnectError("down", request=request))
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert update.message.replies[-1] == "gateway에 연결하지 못했습니다."
-
-
-def test_brain_command_handles_gateway_timeout(make_update_context):
-    request = httpx.Request("POST", "http://test/agent/brain")
-    client = FakeModelsClient(post_error=httpx.ReadTimeout("slow", request=request))
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert update.message.replies[-1] == "brain 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요."
-
-
-def test_brain_command_handles_malformed_gateway_response(make_update_context):
-    client = FakeModelsClient(post_payload=["not", "an", "object"])
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    assert update.message.replies[-1] == "brain 응답 형식을 처리하지 못했습니다."
-
-
-def test_brain_command_splits_long_briefing_into_multiple_replies(make_update_context):
-    long_line = "디스크 사용률 71.2% " + ("매우안정적 " * 900)
-    client = FakeModelsClient(
-        post_payload={
-            "overall_status": "ok",
-            "message_lines": ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"],
-        }
-    )
-    update, context = make_update_context(text="/brain", client=client)
-
-    asyncio.run(bot.brain_command(update, context))
-
-    expected_message = brain_formatter.build_brain_message("ok", ["ai-gateway 정상", long_line, "메모리 사용률 53.4%"])
-    expected_chunks = bot.split_telegram_text(expected_message)
-
-    assert len(expected_chunks) > 1
-    assert update.message.replies == expected_chunks
 
 
 def test_model_command_shows_selected_model(make_update_context):
@@ -921,21 +655,12 @@ class FakeModelsClient:
         get_error=None,
         status_error=None,
         json_error=None,
-        post_payload=None,
-        post_error=None,
-        post_status_error=None,
-        post_json_error=None,
     ):
         self.payload = payload
         self.get_error = get_error
         self.status_error = status_error
         self.json_error = json_error
         self.calls = []
-        self.post_payload = post_payload
-        self.post_error = post_error
-        self.post_status_error = post_status_error
-        self.post_json_error = post_json_error
-        self.post_calls = []
 
     async def get(self, path, headers=None):
         self.calls.append({"path": path, "headers": headers})
@@ -945,16 +670,6 @@ class FakeModelsClient:
             payload=self.payload,
             status_error=self.status_error,
             json_error=self.json_error,
-        )
-
-    async def post(self, path, json=None, headers=None):
-        self.post_calls.append({"path": path, "json": json, "headers": headers})
-        if self.post_error is not None:
-            raise self.post_error
-        return FakeGetResponse(
-            payload=self.post_payload,
-            status_error=self.post_status_error,
-            json_error=self.post_json_error,
         )
 
 
@@ -1112,8 +827,6 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     bot.user_selected_models[10] = "gpt-4o-mini"
     bot.user_selected_presets[10] = "coder"
     bot.user_document_summary_modes[10] = "action"
-    bot.user_brain_alert_modes[10] = "notable"
-    bot.user_brain_alert_times[10] = "07:00"
 
     bot.save_bot_state()
 
@@ -1124,8 +837,6 @@ def test_save_bot_state_writes_json_file(tmp_path, monkeypatch):
     assert '"selected_models":{"10":"gpt-4o-mini"}' in payload
     assert '"selected_presets":{"10":"coder"}' in payload
     assert '"document_summary_modes":{"10":"action"}' in payload
-    assert '"brain_alert_modes":{"10":"notable"}' in payload
-    assert '"brain_alert_times":{"10":"07:00"}' in payload
 
 
 def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
@@ -1135,7 +846,7 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     state_path.write_text(
         '{"version":1,"conversations":{"123":{"default":["User: a","AI: b"]}},"active_sessions":{"123":"default"},'
         '"selected_models":{"123":"gpt-4o-mini"},"selected_presets":{"123":"ENGLISH"},'
-        '"document_summary_modes":{"123":"BULLETS"},"brain_alert_modes":{"123":"all"},"brain_alert_times":{"123":"07:00"}}',
+        '"document_summary_modes":{"123":"BULLETS"}}',
         encoding="utf-8",
     )
     monkeypatch.setattr(bot, "LOCAL_DATA_DIR", str(state_dir))
@@ -1147,23 +858,6 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.user_selected_models[123] == "gpt-4o-mini"
     assert bot.user_selected_presets[123] == "english"
     assert bot.user_document_summary_modes[123] == "bullets"
-    assert bot.user_brain_alert_modes[123] == "all"
-    assert bot.user_brain_alert_times[123] == "07:00"
-
-
-def test_load_bot_state_normalizes_brain_alert_on_alias_to_notable(tmp_path, monkeypatch):
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_path = state_dir / "bot_state.json"
-    state_path.write_text(
-        '{"brain_alert_modes":{"123":"on"}}',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(bot, "STATE_FILE_PATH", str(state_path))
-
-    bot.load_bot_state()
-
-    assert bot.user_brain_alert_modes[123] == "notable"
 
 
 def test_load_bot_state_normalizes_invalid_document_mode_to_default(tmp_path, monkeypatch):
