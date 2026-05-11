@@ -1,5 +1,3 @@
-import httpx
-
 def extract_model_names(payload) -> list[str]:
     if isinstance(payload, dict):
         if isinstance(payload.get("models"), list):

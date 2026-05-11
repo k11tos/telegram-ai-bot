@@ -655,21 +655,12 @@ class FakeModelsClient:
         get_error=None,
         status_error=None,
         json_error=None,
-        post_payload=None,
-        post_error=None,
-        post_status_error=None,
-        post_json_error=None,
     ):
         self.payload = payload
         self.get_error = get_error
         self.status_error = status_error
         self.json_error = json_error
         self.calls = []
-        self.post_payload = post_payload
-        self.post_error = post_error
-        self.post_status_error = post_status_error
-        self.post_json_error = post_json_error
-        self.post_calls = []
 
     async def get(self, path, headers=None):
         self.calls.append({"path": path, "headers": headers})
@@ -679,16 +670,6 @@ class FakeModelsClient:
             payload=self.payload,
             status_error=self.status_error,
             json_error=self.json_error,
-        )
-
-    async def post(self, path, json=None, headers=None):
-        self.post_calls.append({"path": path, "json": json, "headers": headers})
-        if self.post_error is not None:
-            raise self.post_error
-        return FakeGetResponse(
-            payload=self.post_payload,
-            status_error=self.post_status_error,
-            json_error=self.post_json_error,
         )
 
 
