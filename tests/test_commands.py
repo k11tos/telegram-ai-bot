@@ -1037,3 +1037,120 @@ def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatc
     assert bot.conversations == {}
     assert bot.user_selected_models == {}
     assert bot.user_selected_presets == {}
+
+class FakeObsidianClient:
+    def __init__(self, post_payload=None, get_payload=None, post_error=None, status_error=None):
+        self.post_payload = post_payload if post_payload is not None else {"job_id": "job-123"}
+        self.get_payload = get_payload if get_payload is not None else {
+            "queue": {"pending": 1, "running": 0, "completed": 2, "failed": 0},
+            "worker": {"status": "online"},
+        }
+        self.post_error = post_error
+        self.status_error = status_error
+        self.calls = []
+
+    async def post(self, path, json=None, headers=None):
+        self.calls.append({"method": "POST", "path": path, "json": json, "headers": headers})
+        if self.post_error is not None:
+            raise self.post_error
+        return FakeGetResponse(payload=self.post_payload, status_error=self.status_error)
+
+    async def get(self, path, headers=None):
+        self.calls.append({"method": "GET", "path": path, "headers": headers})
+        return FakeGetResponse(payload=self.get_payload, status_error=self.status_error)
+
+
+def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "secret-token")
+    client = FakeObsidianClient(post_payload={"job_id": "wiki-1"})
+    update, context = make_update_context(
+        user_id=123,
+        chat_id=456,
+        text="/wiki ask hello?",
+        client=client,
+        args=["ask", "hello?"],
+    )
+    update.message.message_id = 789
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == [
+        {
+            "method": "POST",
+            "path": bot.OBSIDIAN_JOBS_PATH,
+            "json": {
+                "command": "ask",
+                "payload": {"question": "hello?"},
+                "telegram_chat_id": 456,
+                "telegram_message_id": 789,
+                "requested_by": 123,
+            },
+            "headers": {
+                "X-Request-Id": client.calls[0]["headers"]["X-Request-Id"],
+                "Authorization": "Bearer secret-token",
+            },
+        }
+    ]
+    assert update.message.replies[-1] == "위키 ask 작업을 접수했어요. job_id=wiki-1"
+
+
+def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "999")
+    client = FakeObsidianClient()
+    update, context = make_update_context(user_id=123, text="/wiki ingest", client=client, args=["ingest"])
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == []
+    assert update.message.replies[-1] == "이 /wiki 명령을 사용할 권한이 없어요."
+
+
+def test_wiki_missing_subcommand_shows_help(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    update, context = make_update_context(text="/wiki", client=FakeObsidianClient(), args=[])
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
+
+
+def test_wiki_ask_requires_question(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    update, context = make_update_context(text="/wiki ask", client=FakeObsidianClient(), args=["ask"])
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
+
+
+def test_wiki_capture_requires_text(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    update, context = make_update_context(text="/wiki capture", client=FakeObsidianClient(), args=["capture"])
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
+
+
+def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"id": 55})
+    update, context = make_update_context(text="/wiki ingest", client=client, args=["ingest"])
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"]["command"] == "ingest"
+    assert client.calls[0]["json"]["payload"] == {}
+    assert update.message.replies[-1] == "위키 ingest 작업을 접수했어요. job_id=55"
+
+
+def test_wiki_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    request = httpx.Request("POST", "http://test/obsidian/jobs")
+    client = FakeObsidianClient(post_error=httpx.RequestError("down", request=request))
+    update, context = make_update_context(text="/wiki ingest", client=client, args=["ingest"])
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == "위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요."
