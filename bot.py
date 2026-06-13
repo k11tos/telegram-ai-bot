@@ -68,6 +68,8 @@ AI_GATEWAY_STREAM_PATH = "/generate_stream"
 AI_GATEWAY_MODELS_PATH = "/models"
 AI_GATEWAY_PRESETS_PATH = "/presets"
 AI_GATEWAY_READY_PATH = "/health/ready"
+OBSIDIAN_JOBS_PATH = "/obsidian/jobs"
+OBSIDIAN_STATUS_PATH = "/obsidian/status"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
 
@@ -214,6 +216,7 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
+    "/wiki ask|ingest|capture|draft|status - Obsidian 위키 작업 요청",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -708,6 +711,190 @@ def get_user_document_summary_mode(user_id: int) -> str:
     selected_mode = runtime_state.user_document_summary_modes.get(user_id)
     return normalize_document_summary_mode(selected_mode)
 
+
+WIKI_HELP_MESSAGE = (
+    "사용법: /wiki ask <question> | /wiki ingest | /wiki capture <text> | "
+    "/wiki draft <topic> | /wiki status"
+)
+
+
+def parse_allowed_telegram_user_ids(raw_value: str | None = None) -> set[int]:
+    source = os.getenv("ALLOWED_TELEGRAM_USER_IDS", "") if raw_value is None else raw_value
+    allowed_ids: set[int] = set()
+    for item in source.split(","):
+        normalized = item.strip()
+        if not normalized:
+            continue
+        try:
+            allowed_ids.add(int(normalized))
+        except ValueError:
+            logger.warning("invalid_allowed_telegram_user_id value=%s", normalized)
+    return allowed_ids
+
+
+def is_wiki_user_allowed(user_id: int) -> bool:
+    return user_id in parse_allowed_telegram_user_ids()
+
+
+def build_obsidian_auth_headers(request_id: str) -> dict[str, str]:
+    token = os.getenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "").strip()
+    return {"X-Request-Id": request_id, "Authorization": f"Bearer {token}"}
+
+
+def extract_obsidian_job_id(payload) -> str:
+    if isinstance(payload, dict):
+        job_id = payload.get("job_id") or payload.get("id")
+        if isinstance(job_id, str) and job_id.strip():
+            return job_id.strip()
+        if isinstance(job_id, int):
+            return str(job_id)
+    return "unknown"
+
+
+def build_wiki_accepted_message(command: str, job_id: str) -> str:
+    return f"위키 {command} 작업을 접수했어요. job_id={job_id}"
+
+
+def build_obsidian_status_message(payload) -> str:
+    if not isinstance(payload, dict):
+        return "Obsidian 상태를 해석할 수 없어요."
+
+    queue = payload.get("queue_counts") if isinstance(payload.get("queue_counts"), dict) else None
+    if queue is None:
+        queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
+
+    queue_lines = []
+    for key in ("queued", "running", "succeeded", "failed", "expired"):
+        if key in queue:
+            queue_lines.append(f"  - {key}: {queue[key]}")
+    for key in ("pending", "completed"):
+        if key in queue:
+            queue_lines.append(f"  - {key}: {queue[key]}")
+    if not queue_lines:
+        queue_lines.append("  - 정보 없음")
+
+    worker = payload.get("worker") if isinstance(payload.get("worker"), dict) else {}
+    worker_lines = []
+    worker_status = worker.get("status") or payload.get("worker_status")
+    if worker_status:
+        worker_lines.append(f"  - status: {worker_status}")
+        for key in ("last_seen", "active_job_id"):
+            if key in worker:
+                worker_lines.append(f"  - {key}: {worker[key]}")
+    else:
+        worker_lines.append("  - gateway에서 worker 상태를 별도로 보고하지 않음")
+
+    last_finished_job = payload.get("last_finished_job")
+    if isinstance(last_finished_job, dict):
+        job_summary_parts = []
+        for key in ("id", "job_id", "command", "status", "finished_at", "updated_at"):
+            value = last_finished_job.get(key)
+            if value is not None:
+                job_summary_parts.append(f"{key}={value}")
+        if job_summary_parts:
+            worker_lines.append("  - last_finished_job: " + ", ".join(job_summary_parts))
+    elif last_finished_job is not None:
+        worker_lines.append(f"  - last_finished_job: {last_finished_job}")
+
+    return (
+        "Obsidian 작업 상태\n- queue:\n"
+        + "\n".join(queue_lines)
+        + "\n- worker:\n"
+        + "\n".join(worker_lines)
+    )
+
+
+async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    message_id = getattr(update.message, "message_id", None)
+
+    if not is_wiki_user_allowed(user_id):
+        await update.message.reply_text("이 /wiki 명령을 사용할 권한이 없어요.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(WIKI_HELP_MESSAGE)
+        return
+
+    subcommand = context.args[0].strip().lower()
+    rest = " ".join(context.args[1:]).strip()
+    job_payload: dict[str, object]
+
+    if subcommand == "ask":
+        if not rest:
+            await update.message.reply_text(WIKI_HELP_MESSAGE)
+            return
+        job_payload = {"question": rest}
+    elif subcommand == "ingest":
+        job_payload = {}
+    elif subcommand == "capture":
+        if not rest:
+            await update.message.reply_text(WIKI_HELP_MESSAGE)
+            return
+        job_payload = {"text": rest, "source": "telegram"}
+    elif subcommand == "draft":
+        if not rest:
+            await update.message.reply_text(WIKI_HELP_MESSAGE)
+            return
+        job_payload = {"topic": rest}
+    elif subcommand == "status":
+        await wiki_status_command(update, context)
+        return
+    else:
+        await update.message.reply_text(WIKI_HELP_MESSAGE)
+        return
+
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        await update.message.reply_text("위키 작업을 접수할 수 없어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    request_id = uuid.uuid4().hex[:12]
+    payload = {
+        "command": subcommand,
+        "payload": job_payload,
+        "telegram_chat_id": chat_id,
+        "telegram_message_id": message_id,
+        "requested_by": user_id,
+    }
+
+    try:
+        response = await client.post(
+            OBSIDIAN_JOBS_PATH,
+            json=payload,
+            headers=build_obsidian_auth_headers(request_id),
+        )
+        response.raise_for_status()
+        job_id = extract_obsidian_job_id(response.json())
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        logger.warning("obsidian_job_create_failed request_id=%s user_id=%s error=%s", request_id, user_id, error)
+        await update.message.reply_text("위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    await update.message.reply_text(build_wiki_accepted_message(subcommand, job_id))
+
+
+async def wiki_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        await update.message.reply_text("위키 상태를 확인할 수 없어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    request_id = uuid.uuid4().hex[:12]
+    try:
+        response = await client.get(
+            OBSIDIAN_STATUS_PATH,
+            headers=build_obsidian_auth_headers(request_id),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        logger.warning("obsidian_status_failed request_id=%s error=%s", request_id, error)
+        await update.message.reply_text("위키 상태를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    await update.message.reply_text(build_obsidian_status_message(payload))
 
 async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1585,6 +1772,7 @@ def main():
     app.add_handler(CommandHandler("session_delete", session_delete_command))
     app.add_handler(CommandHandler("sessions", sessions_command))
     app.add_handler(CommandHandler("docmode", docmode_command))
+    app.add_handler(CommandHandler("wiki", wiki_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(build_supported_document_filter(), handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
