@@ -759,21 +759,42 @@ def build_obsidian_status_message(payload) -> str:
     if not isinstance(payload, dict):
         return "Obsidian 상태를 해석할 수 없어요."
 
-    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
-    worker = payload.get("worker") if isinstance(payload.get("worker"), dict) else {}
+    queue = payload.get("queue_counts") if isinstance(payload.get("queue_counts"), dict) else None
+    if queue is None:
+        queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
 
     queue_lines = []
-    for key in ("pending", "running", "completed", "failed"):
+    for key in ("queued", "running", "succeeded", "failed", "expired"):
+        if key in queue:
+            queue_lines.append(f"  - {key}: {queue[key]}")
+    for key in ("pending", "completed"):
         if key in queue:
             queue_lines.append(f"  - {key}: {queue[key]}")
     if not queue_lines:
-        queue_lines.append(f"  - {queue if queue else '정보 없음'}")
+        queue_lines.append("  - 정보 없음")
 
-    worker_status = worker.get("status") or payload.get("worker_status") or "정보 없음"
-    worker_lines = [f"  - status: {worker_status}"]
-    for key in ("last_seen", "active_job_id"):
-        if key in worker:
-            worker_lines.append(f"  - {key}: {worker[key]}")
+    worker = payload.get("worker") if isinstance(payload.get("worker"), dict) else {}
+    worker_lines = []
+    worker_status = worker.get("status") or payload.get("worker_status")
+    if worker_status:
+        worker_lines.append(f"  - status: {worker_status}")
+        for key in ("last_seen", "active_job_id"):
+            if key in worker:
+                worker_lines.append(f"  - {key}: {worker[key]}")
+    else:
+        worker_lines.append("  - gateway에서 worker 상태를 별도로 보고하지 않음")
+
+    last_finished_job = payload.get("last_finished_job")
+    if isinstance(last_finished_job, dict):
+        job_summary_parts = []
+        for key in ("id", "job_id", "command", "status", "finished_at", "updated_at"):
+            value = last_finished_job.get(key)
+            if value is not None:
+                job_summary_parts.append(f"{key}={value}")
+        if job_summary_parts:
+            worker_lines.append("  - last_finished_job: " + ", ".join(job_summary_parts))
+    elif last_finished_job is not None:
+        worker_lines.append(f"  - last_finished_job: {last_finished_job}")
 
     return (
         "Obsidian 작업 상태\n- queue:\n"
