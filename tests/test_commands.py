@@ -1098,15 +1098,20 @@ def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
     assert update.message.replies[-1] == "위키 ask 작업을 접수했어요. job_id=wiki-1"
 
 
-def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch):
+def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch, caplog):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "999")
     client = FakeObsidianClient()
     update, context = make_update_context(user_id=123, text="/wiki ingest", client=client, args=["ingest"])
 
-    asyncio.run(bot.wiki_command(update, context))
+    with caplog.at_level("WARNING"):
+        asyncio.run(bot.wiki_command(update, context))
 
     assert client.calls == []
-    assert update.message.replies[-1] == "이 /wiki 명령을 사용할 권한이 없어요."
+    assert update.message.replies[-1] == bot.build_wiki_denied_message(123)
+    assert "wiki_permission_denied" in caplog.text
+    assert "user_id=123" in caplog.text
+    assert "chat_id=456" in caplog.text
+    assert "allowlist_empty=False" in caplog.text
 
 
 def test_wiki_missing_subcommand_shows_help(make_update_context, monkeypatch):
@@ -1222,4 +1227,4 @@ def test_wiki_status_disallowed_user_does_not_call_gateway(make_update_context, 
     asyncio.run(bot.wiki_command(update, context))
 
     assert client.calls == []
-    assert update.message.replies[-1] == "이 /wiki 명령을 사용할 권한이 없어요."
+    assert update.message.replies[-1] == bot.build_wiki_denied_message(123)

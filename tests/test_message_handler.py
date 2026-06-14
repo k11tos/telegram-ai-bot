@@ -205,6 +205,39 @@ def test_stream_failure_falls_back_to_chat_and_appends_reply(make_update_context
     assert update.message.waiting_message.edits[-1] == "폴백 응답"
 
 
+def test_stream_done_without_text_and_empty_fallback_returns_blank_message_without_history(make_update_context):
+    client = FakeClient(
+        stream_lines=["data: [DONE]"],
+        post_payload={"response": ""},
+    )
+    update, context = make_update_context(text="빈 응답 테스트", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert len(client.post_calls) == 1
+    assert update.message.waiting_message.edits[-1] == bot.BLANK_AI_RESPONSE_MESSAGE
+    assert "" not in update.message.waiting_message.edits
+    assert all(reply for reply in update.message.replies)
+    assert bot.get_session_history(123) == []
+
+
+def test_fallback_whitespace_response_returns_blank_message_without_empty_telegram_calls(make_update_context):
+    request = httpx.Request("POST", "http://test/chat")
+    stream_error = httpx.RequestError("stream failed", request=request)
+    client = FakeClient(
+        stream_error=stream_error,
+        post_payload={"response": "   \n\t  "},
+    )
+    update, context = make_update_context(text="공백 응답 테스트", client=client)
+
+    asyncio.run(bot.handle_message(update, context))
+
+    assert update.message.waiting_message.edits[-1] == bot.BLANK_AI_RESPONSE_MESSAGE
+    assert all(edit for edit in update.message.waiting_message.edits)
+    assert all(reply for reply in update.message.replies)
+    assert bot.get_session_history(123) == []
+
+
 def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(make_update_context):
     async def scenario():
         user_id = 452
