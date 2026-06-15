@@ -624,6 +624,15 @@ def get_user_finalize_condition(user_id):
     return runtime_state.user_finalize_conditions[user_id]
 
 
+async def advance_user_finalize_turn(user_id: int, turn_id: int) -> None:
+    finalize_condition = get_user_finalize_condition(user_id)
+    async with finalize_condition:
+        while runtime_state.user_next_turn_to_finalize.get(user_id, 1) != turn_id:
+            await finalize_condition.wait()
+        runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
+        finalize_condition.notify_all()
+
+
 session_handlers = build_session_handlers(
     SessionCommandDependencies(
         default_session_name=DEFAULT_SESSION_NAME,
@@ -1165,11 +1174,7 @@ async def _begin_message_turn_with_inflight_guard(
     except Exception:
         async with lock:
             runtime_state.user_in_flight_requests[user_id] = False
-        finalize_condition = get_user_finalize_condition(user_id)
-        async with finalize_condition:
-            if runtime_state.user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
-                finalize_condition.notify_all()
+        await advance_user_finalize_turn(user_id, turn_id)
         raise
 
     return {
@@ -1390,11 +1395,7 @@ async def _create_waiting_message(
             )
 
         if advance_finalize_on_failure and user_id is not None and turn_id is not None:
-            finalize_condition = get_user_finalize_condition(user_id)
-            async with finalize_condition:
-                if runtime_state.user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                    runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
-                    finalize_condition.notify_all()
+            await advance_user_finalize_turn(user_id, turn_id)
 
         return None
 
@@ -1569,6 +1570,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await waiting_msg.edit_text(
                 "죄송합니다. AI 서버 연결이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
             )
+            await advance_user_finalize_turn(user_id, turn_id)
             return
 
         try:
@@ -1590,6 +1592,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 request_start_ts=request_start_ts,
             )
+            await advance_user_finalize_turn(user_id, turn_id)
             return
 
         response_delivered = await _deliver_telegram_response(

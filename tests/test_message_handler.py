@@ -238,6 +238,47 @@ def test_fallback_whitespace_response_returns_blank_message_without_empty_telegr
     assert bot.get_session_history(123) == []
 
 
+def test_blank_response_turn_advances_finalize_queue_and_next_message_recovers(make_update_context):
+    async def scenario():
+        user_id = 616
+        blank_client = FakeClient(
+            stream_lines=["data: [DONE]"],
+            post_payload={"response": ""},
+        )
+        blank_update, blank_context = make_update_context(
+            user_id=user_id,
+            text="빈 응답",
+            client=blank_client,
+        )
+
+        await bot.handle_message(blank_update, blank_context)
+
+        assert blank_update.message.waiting_message.edits[-1] == bot.BLANK_AI_RESPONSE_MESSAGE
+        assert bot.get_session_history(user_id) == []
+        assert bot.user_next_turn_to_finalize[user_id] == 2
+
+        success_client = FakeClient(
+            stream_lines=[
+                f"data: {json.dumps({'response': '정상 응답'})}",
+                "data: [DONE]",
+            ],
+        )
+        success_update, success_context = make_update_context(
+            user_id=user_id,
+            text="다음 질문",
+            client=success_client,
+        )
+
+        await asyncio.wait_for(bot.handle_message(success_update, success_context), timeout=1)
+
+        assert success_update.message.waiting_message.edits[-1] == "정상 응답"
+        assert bot.user_in_flight_requests[user_id] is False
+        assert bot.user_next_turn_to_finalize[user_id] == 3
+        assert bot.get_session_history(user_id) == ["User: 다음 질문", "AI: 정상 응답"]
+
+    asyncio.run(scenario())
+
+
 def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(make_update_context):
     async def scenario():
         user_id = 452
