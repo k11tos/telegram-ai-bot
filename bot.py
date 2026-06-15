@@ -185,6 +185,13 @@ MAX_HISTORY = 10
 DEFAULT_SESSION_NAME = "default"
 HTTP_CLIENT_KEY = "http_client"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
+BLANK_AI_RESPONSE_MESSAGE = "AI 서버가 빈 응답을 반환했어요. 잠시 후 다시 시도해주세요."
+
+
+class BlankAIResponseError(ValueError):
+    """Raised when the gateway returns no usable AI response text."""
+
+
 STREAM_EDIT_INTERVAL_SEC = 1.0
 SUPPORTED_DOCUMENT_EXTENSIONS = (
     ".txt",
@@ -479,6 +486,14 @@ def build_status_message(context: ContextTypes.DEFAULT_TYPE) -> str:
     return "\n".join(lines)
 
 
+def normalize_ai_response_text(result: str | None) -> str | None:
+    if result is None:
+        return None
+    if not result.strip():
+        return None
+    return result
+
+
 def fit_telegram_text(text: str) -> str:
     if len(text) <= TELEGRAM_MESSAGE_MAX_LEN:
         return text
@@ -609,6 +624,15 @@ def get_user_finalize_condition(user_id):
     return runtime_state.user_finalize_conditions[user_id]
 
 
+async def advance_user_finalize_turn(user_id: int, turn_id: int) -> None:
+    finalize_condition = get_user_finalize_condition(user_id)
+    async with finalize_condition:
+        while runtime_state.user_next_turn_to_finalize.get(user_id, 1) != turn_id:
+            await finalize_condition.wait()
+        runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
+        finalize_condition.notify_all()
+
+
 session_handlers = build_session_handlers(
     SessionCommandDependencies(
         default_session_name=DEFAULT_SESSION_NAME,
@@ -736,6 +760,14 @@ def is_wiki_user_allowed(user_id: int) -> bool:
     return user_id in parse_allowed_telegram_user_ids()
 
 
+def build_wiki_denied_message(user_id: int) -> str:
+    return (
+        "이 /wiki 명령을 사용할 권한이 없어요. "
+        f"관리자라면 Telegram user_id={user_id} 값을 "
+        "ALLOWED_TELEGRAM_USER_IDS에 추가해 주세요."
+    )
+
+
 def build_obsidian_auth_headers(request_id: str) -> dict[str, str]:
     token = os.getenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "").strip()
     return {"X-Request-Id": request_id, "Authorization": f"Bearer {token}"}
@@ -809,8 +841,15 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id if update.effective_chat else None
     message_id = getattr(update.message, "message_id", None)
 
-    if not is_wiki_user_allowed(user_id):
-        await update.message.reply_text("이 /wiki 명령을 사용할 권한이 없어요.")
+    allowed_user_ids = parse_allowed_telegram_user_ids()
+    if user_id not in allowed_user_ids:
+        logger.warning(
+            "wiki_permission_denied user_id=%s chat_id=%s allowlist_empty=%s",
+            user_id,
+            chat_id,
+            not bool(allowed_user_ids),
+        )
+        await update.message.reply_text(build_wiki_denied_message(user_id))
         return
 
     if not context.args:
@@ -1135,11 +1174,7 @@ async def _begin_message_turn_with_inflight_guard(
     except Exception:
         async with lock:
             runtime_state.user_in_flight_requests[user_id] = False
-        finalize_condition = get_user_finalize_condition(user_id)
-        async with finalize_condition:
-            if runtime_state.user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
-                finalize_condition.notify_all()
+        await advance_user_finalize_turn(user_id, turn_id)
         raise
 
     return {
@@ -1230,7 +1265,11 @@ async def _call_gateway_with_stream_fallback(
         fallback_resp.raise_for_status()
         result = fallback_resp.json()["response"]
 
-    return result
+    normalized_result = normalize_ai_response_text(result)
+    if normalized_result is None:
+        raise BlankAIResponseError("gateway returned blank AI response")
+
+    return normalized_result
 
 
 async def _deliver_telegram_response(
@@ -1356,11 +1395,7 @@ async def _create_waiting_message(
             )
 
         if advance_finalize_on_failure and user_id is not None and turn_id is not None:
-            finalize_condition = get_user_finalize_condition(user_id)
-            async with finalize_condition:
-                if runtime_state.user_next_turn_to_finalize.get(user_id, 1) == turn_id:
-                    runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
-                    finalize_condition.notify_all()
+            await advance_user_finalize_turn(user_id, turn_id)
 
         return None
 
@@ -1444,6 +1479,12 @@ def _map_gateway_request_error(error: Exception) -> tuple[str, str, dict[str, st
             "gateway_request_error",
             "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
             {"error_type": type(error).__name__},
+        )
+    if isinstance(error, BlankAIResponseError):
+        return (
+            "gateway_blank_response",
+            BLANK_AI_RESPONSE_MESSAGE,
+            {},
         )
     if isinstance(error, (ValueError, KeyError)):
         return (
@@ -1529,6 +1570,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await waiting_msg.edit_text(
                 "죄송합니다. AI 서버 연결이 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
             )
+            await advance_user_finalize_turn(user_id, turn_id)
             return
 
         try:
@@ -1550,6 +1592,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 request_start_ts=request_start_ts,
             )
+            await advance_user_finalize_turn(user_id, turn_id)
             return
 
         response_delivered = await _deliver_telegram_response(
