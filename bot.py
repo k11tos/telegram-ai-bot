@@ -69,6 +69,7 @@ AI_GATEWAY_MODELS_PATH = "/models"
 AI_GATEWAY_PRESETS_PATH = "/presets"
 AI_GATEWAY_READY_PATH = "/health/ready"
 OBSIDIAN_JOBS_PATH = "/obsidian/jobs"
+OBSIDIAN_JOB_DETAIL_PATH_TEMPLATE = "/obsidian/jobs/{job_id}"
 OBSIDIAN_STATUS_PATH = "/obsidian/status"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
@@ -738,7 +739,7 @@ def get_user_document_summary_mode(user_id: int) -> str:
 
 WIKI_HELP_MESSAGE = (
     "사용법: /wiki ask <question> | /wiki ingest | /wiki capture <text> | "
-    "/wiki draft <topic> | /wiki status"
+    "/wiki draft <topic> | /wiki status [job_id] | /wiki result <job_id>"
 )
 
 
@@ -836,6 +837,76 @@ def build_obsidian_status_message(payload) -> str:
     )
 
 
+def extract_wiki_job_id(args: list[str]) -> str | None:
+    if not args:
+        return None
+
+    for value in args:
+        normalized = value.strip()
+        if normalized:
+            return normalized
+
+    return None
+
+
+def build_obsidian_job_result_message(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return "위키 작업 결과를 해석할 수 없어요."
+
+    job_id = extract_obsidian_job_id(payload)
+    status = payload.get("status")
+    normalized_status = status.strip().lower() if isinstance(status, str) else ""
+
+    if normalized_status in {"queued", "running"}:
+        return f"위키 작업이 아직 처리 중이에요. job_id={job_id} status={normalized_status}"
+
+    if normalized_status == "failed":
+        error_text = payload.get("error_text")
+        if isinstance(error_text, str) and error_text.strip():
+            return f"위키 작업이 실패했어요. job_id={job_id}\n오류: {error_text.strip()}"
+        return f"위키 작업이 실패했어요. job_id={job_id}"
+
+    if normalized_status == "expired":
+        return f"위키 작업이 만료되어 결과를 볼 수 없어요. 다시 요청해 주세요. job_id={job_id}"
+
+    result_text = payload.get("result_text")
+    rendered = ""
+    if isinstance(result_text, str):
+        raw_result_text = result_text.strip()
+        if raw_result_text:
+            rendered = raw_result_text
+            try:
+                parsed_result = json.loads(raw_result_text)
+            except json.JSONDecodeError:
+                parsed_result = None
+
+            if isinstance(parsed_result, dict):
+                answer = parsed_result.get("answer")
+                if isinstance(answer, str) and answer.strip():
+                    rendered = answer.strip()
+
+                    references = parsed_result.get("references")
+                    if isinstance(references, list):
+                        normalized_references = [
+                            str(reference).strip()
+                            for reference in references
+                            if str(reference).strip()
+                        ]
+                        if normalized_references:
+                            rendered += "\n\n참고:\n" + "\n".join(
+                                f"- {reference}" for reference in normalized_references[:5]
+                            )
+                else:
+                    rendered = raw_result_text
+    elif result_text is not None:
+        rendered = str(result_text).strip()
+
+    if not rendered.strip():
+        return "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+
+    return rendered
+
+
 async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -878,7 +949,18 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         job_payload = {"topic": rest}
     elif subcommand == "status":
-        await wiki_status_command(update, context)
+        job_id = extract_wiki_job_id(context.args[1:])
+        if job_id is None:
+            await wiki_status_command(update, context)
+        else:
+            await wiki_job_result_command(update, context, job_id)
+        return
+    elif subcommand == "result":
+        job_id = extract_wiki_job_id(context.args[1:])
+        if job_id is None:
+            await update.message.reply_text(WIKI_HELP_MESSAGE)
+        else:
+            await wiki_job_result_command(update, context, job_id)
         return
     else:
         await update.message.reply_text(WIKI_HELP_MESSAGE)
@@ -934,6 +1016,36 @@ async def wiki_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     await update.message.reply_text(build_obsidian_status_message(payload))
+
+
+async def wiki_job_result_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    job_id: str,
+) -> None:
+    client = context.application.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        await update.message.reply_text("위키 작업 결과를 확인할 수 없어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    request_id = uuid.uuid4().hex[:12]
+    path = OBSIDIAN_JOB_DETAIL_PATH_TEMPLATE.format(job_id=job_id)
+    try:
+        response = await client.get(
+            path,
+            headers=build_obsidian_auth_headers(request_id),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        logger.warning("obsidian_job_result_failed request_id=%s job_id=%s error=%s", request_id, job_id, error)
+        await update.message.reply_text("위키 작업 결과를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        return
+
+    message = build_obsidian_job_result_message(payload)
+    if not message.strip():
+        message = "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+    await _send_chunked_message_as_replies(update, message)
 
 async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id

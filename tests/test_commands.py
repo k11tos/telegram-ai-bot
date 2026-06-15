@@ -1039,12 +1039,21 @@ def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatc
     assert bot.user_selected_presets == {}
 
 class FakeObsidianClient:
-    def __init__(self, post_payload=None, get_payload=None, post_error=None, get_error=None, status_error=None):
+    def __init__(
+        self,
+        post_payload=None,
+        get_payload=None,
+        get_payloads=None,
+        post_error=None,
+        get_error=None,
+        status_error=None,
+    ):
         self.post_payload = post_payload if post_payload is not None else {"job_id": "job-123"}
         self.get_payload = get_payload if get_payload is not None else {
             "queue": {"pending": 1, "running": 0, "completed": 2, "failed": 0},
             "worker": {"status": "online"},
         }
+        self.get_payloads = get_payloads or {}
         self.post_error = post_error
         self.get_error = get_error
         self.status_error = status_error
@@ -1060,7 +1069,8 @@ class FakeObsidianClient:
         self.calls.append({"method": "GET", "path": path, "headers": headers})
         if self.get_error is not None:
             raise self.get_error
-        return FakeGetResponse(payload=self.get_payload, status_error=self.status_error)
+        payload = self.get_payloads.get(path, self.get_payload)
+        return FakeGetResponse(payload=payload, status_error=self.status_error)
 
 
 def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
@@ -1206,6 +1216,153 @@ def test_wiki_status_calls_gateway_with_auth_and_renders_queue_counts(make_updat
     assert "- expired: 0" in reply
     assert "gateway에서 worker 상태를 별도로 보고하지 않음" in reply
     assert "last_finished_job: job_id=job-done, command=ask, status=succeeded" in reply
+
+
+def test_wiki_status_with_job_id_fetches_job_and_replies_with_answer(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "detail-token")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-42": {
+                "job_id": "job-42",
+                "status": "succeeded",
+                "result_text": json.dumps(
+                    {"answer": "여행지는 제주였어요.", "references": ["Trips/Jeju.md"]}
+                ),
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki status job-42",
+        client=client,
+        args=["status", "job-42"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == [
+        {
+            "method": "GET",
+            "path": "/obsidian/jobs/job-42",
+            "headers": {
+                "X-Request-Id": client.calls[0]["headers"]["X-Request-Id"],
+                "Authorization": "Bearer detail-token",
+            },
+        }
+    ]
+    assert update.message.replies[-1] == "여행지는 제주였어요.\n\n참고:\n- Trips/Jeju.md"
+
+
+def test_wiki_result_with_job_id_fetches_job_and_replies_with_answer(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-43": {
+                "job_id": "job-43",
+                "status": "succeeded",
+                "result_text": json.dumps({"answer": "결과 본문입니다."}),
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-43",
+        client=client,
+        args=["result", "job-43"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["path"] == "/obsidian/jobs/job-43"
+    assert update.message.replies[-1] == "결과 본문입니다."
+
+
+def test_wiki_job_result_processing_status_returns_processing_message(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-running": {
+                "job_id": "job-running",
+                "status": "running",
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-running",
+        client=client,
+        args=["result", "job-running"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == "위키 작업이 아직 처리 중이에요. job_id=job-running status=running"
+
+
+def test_wiki_job_result_failed_status_includes_error_text(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-failed": {
+                "job_id": "job-failed",
+                "status": "failed",
+                "error_text": "worker timeout",
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-failed",
+        client=client,
+        args=["result", "job-failed"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == "위키 작업이 실패했어요. job_id=job-failed\n오류: worker timeout"
+
+
+def test_wiki_job_result_expired_status_returns_retry_message(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-expired": {
+                "job_id": "job-expired",
+                "status": "expired",
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-expired",
+        client=client,
+        args=["result", "job-expired"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "위키 작업이 만료되어 결과를 볼 수 없어요. 다시 요청해 주세요. job_id=job-expired"
+    )
+    assert update.message.replies[-1] != "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+
+
+def test_wiki_job_result_blank_result_uses_safe_fallback(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-blank": {
+                "job_id": "job-blank",
+                "status": "succeeded",
+                "result_text": "   ",
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-blank",
+        client=client,
+        args=["result", "job-blank"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
 
 
 def test_wiki_status_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
