@@ -866,6 +866,9 @@ def build_obsidian_job_result_message(payload: object) -> str:
             return f"위키 작업이 실패했어요. job_id={job_id}\n오류: {error_text.strip()}"
         return f"위키 작업이 실패했어요. job_id={job_id}"
 
+    if normalized_status == "expired":
+        return f"위키 작업이 만료되어 결과를 볼 수 없어요. 다시 요청해 주세요. job_id={job_id}"
+
     result_text = payload.get("result_text")
     rendered = ""
     if isinstance(result_text, str):

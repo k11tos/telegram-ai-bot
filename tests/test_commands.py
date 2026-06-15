@@ -1319,6 +1319,30 @@ def test_wiki_job_result_failed_status_includes_error_text(make_update_context, 
     assert update.message.replies[-1] == "위키 작업이 실패했어요. job_id=job-failed\n오류: worker timeout"
 
 
+def test_wiki_job_result_expired_status_returns_retry_message(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-expired": {
+                "job_id": "job-expired",
+                "status": "expired",
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-expired",
+        client=client,
+        args=["result", "job-expired"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "위키 작업이 만료되어 결과를 볼 수 없어요. 다시 요청해 주세요. job_id=job-expired"
+    )
+    assert update.message.replies[-1] != "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+
+
 def test_wiki_job_result_blank_result_uses_safe_fallback(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
