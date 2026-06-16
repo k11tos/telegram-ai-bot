@@ -1384,6 +1384,34 @@ def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update
     )
 
 
+def test_wiki_ask_auto_result_polling_slow_detail_falls_back_to_accepted_message(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+
+    class HangingObsidianClient(FakeObsidianClient):
+        async def get(self, path, headers=None):
+            self.calls.append({"method": "GET", "path": path, "headers": headers})
+            await asyncio.Event().wait()
+
+    client = HangingObsidianClient(post_payload={"job_id": "ask-hang"})
+    update, context = make_update_context(
+        text="/wiki ask hanging?",
+        client=client,
+        args=["ask", "hanging?"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert update.message.replies == [
+        "위키 ask 작업을 접수했어요.\n"
+        "job_id=ask-hang\n\n"
+        "결과 확인:\n"
+        "/wiki result ask-hang"
+    ]
+    assert all(reply.strip() for reply in update.message.replies)
+
+
 def test_wiki_job_result_processing_status_returns_processing_message(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(

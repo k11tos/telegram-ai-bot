@@ -1033,14 +1033,25 @@ async def poll_wiki_ask_result(client, job_id: str) -> str | None:
     if timeout_seconds <= 0:
         return None
 
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
     path = OBSIDIAN_JOB_DETAIL_PATH_TEMPLATE.format(job_id=job_id)
-    for _ in range(timeout_seconds):
-        await asyncio.sleep(1)
+    for attempt_index in range(timeout_seconds):
+        remaining_seconds = deadline - loop.time()
+        if remaining_seconds <= 0:
+            return None
+
         request_id = uuid.uuid4().hex[:12]
         try:
-            response = await client.get(path, headers=build_obsidian_auth_headers(request_id))
+            response = await asyncio.wait_for(
+                client.get(path, headers=build_obsidian_auth_headers(request_id)),
+                timeout=remaining_seconds,
+            )
             response.raise_for_status()
             payload = response.json()
+        except asyncio.TimeoutError:
+            logger.info("obsidian_ask_auto_result_poll_timeout job_id=%s", job_id)
+            return None
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
             logger.warning("obsidian_ask_auto_result_poll_failed job_id=%s error=%s", job_id, error)
             return None
@@ -1050,6 +1061,8 @@ async def poll_wiki_ask_result(client, job_id: str) -> str | None:
         status = payload.get("status")
         normalized_status = status.strip().lower() if isinstance(status, str) else ""
         if normalized_status in {"queued", "running"}:
+            if attempt_index < timeout_seconds - 1:
+                await asyncio.sleep(min(1, max(0, deadline - loop.time())))
             continue
         return build_obsidian_job_result_message(payload)
 
