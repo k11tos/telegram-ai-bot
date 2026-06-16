@@ -1070,6 +1070,8 @@ class FakeObsidianClient:
         if self.get_error is not None:
             raise self.get_error
         payload = self.get_payloads.get(path, self.get_payload)
+        if isinstance(payload, list):
+            payload = payload.pop(0) if payload else self.get_payload
         return FakeGetResponse(payload=payload, status_error=self.status_error)
 
 
@@ -1105,7 +1107,27 @@ def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
             },
         }
     ]
-    assert update.message.replies[-1] == "위키 ask 작업을 접수했어요. job_id=wiki-1"
+    assert update.message.replies[-1] == "위키 ask 작업을 접수했어요.\njob_id=wiki-1\n\n결과 확인:\n/wiki result wiki-1"
+
+
+def test_wiki_capture_creates_capture_job_with_telegram_source(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "cap-1"})
+    update, context = make_update_context(
+        text="/wiki capture quick note",
+        client=client,
+        args=["capture", "quick", "note"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"]["command"] == "capture"
+    assert client.calls[0]["json"]["payload"] == {"text": "quick note", "source": "telegram"}
+    assert update.message.replies[-1] == (
+        "위키 capture 작업을 접수했어요.\n"
+        "job_id=cap-1\n\n"
+        "저장 후 검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
+    )
 
 
 def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch, caplog):
@@ -1160,7 +1182,7 @@ def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
 
     assert client.calls[0]["json"]["command"] == "ingest"
     assert client.calls[0]["json"]["payload"] == {}
-    assert update.message.replies[-1] == "위키 ingest 작업을 접수했어요. job_id=55"
+    assert update.message.replies[-1] == "위키 ingest 작업을 접수했어요.\njob_id=55\n\n처리 완료 후:\n/wiki result 55"
 
 
 def test_wiki_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
@@ -1276,6 +1298,120 @@ def test_wiki_result_with_job_id_fetches_job_and_replies_with_answer(make_update
     assert update.message.replies[-1] == "결과 본문입니다."
 
 
+def test_wiki_result_with_job_id_sends_internal_auth_token(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "result-token")
+    client = FakeObsidianClient(
+        get_payloads={
+            "/obsidian/jobs/job-auth": {
+                "job_id": "job-auth",
+                "status": "succeeded",
+                "result_text": "ok",
+            }
+        }
+    )
+    update, context = make_update_context(
+        text="/wiki result job-auth",
+        client=client,
+        args=["result", "job-auth"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["method"] == "GET"
+    assert client.calls[0]["path"] == "/obsidian/jobs/job-auth"
+    assert client.calls[0]["headers"]["Authorization"] == "Bearer result-token"
+
+
+def test_wiki_ask_auto_result_polling_immediate_success(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(bot.asyncio, "sleep", fake_sleep)
+    client = FakeObsidianClient(
+        post_payload={"job_id": "ask-fast"},
+        get_payloads={
+            "/obsidian/jobs/ask-fast": [{
+                "job_id": "ask-fast",
+                "status": "succeeded",
+                "result_text": json.dumps({"answer": "바로 완료"}),
+            }]
+        },
+    )
+    update, context = make_update_context(
+        text="/wiki ask now?",
+        client=client,
+        args=["ask", "now?"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert update.message.replies[-1] == "바로 완료"
+
+
+def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(bot.asyncio, "sleep", fake_sleep)
+    client = FakeObsidianClient(
+        post_payload={"job_id": "ask-slow"},
+        get_payloads={
+            "/obsidian/jobs/ask-slow": [{"job_id": "ask-slow", "status": "running"}]
+        },
+    )
+    update, context = make_update_context(
+        text="/wiki ask later?",
+        client=client,
+        args=["ask", "later?"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert update.message.replies[-1] == (
+        "위키 ask 작업을 접수했어요.\n"
+        "job_id=ask-slow\n\n"
+        "결과 확인:\n"
+        "/wiki result ask-slow"
+    )
+
+
+def test_wiki_ask_auto_result_polling_slow_detail_falls_back_to_accepted_message(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+
+    class HangingObsidianClient(FakeObsidianClient):
+        async def get(self, path, headers=None):
+            self.calls.append({"method": "GET", "path": path, "headers": headers})
+            await asyncio.Event().wait()
+
+    client = HangingObsidianClient(post_payload={"job_id": "ask-hang"})
+    update, context = make_update_context(
+        text="/wiki ask hanging?",
+        client=client,
+        args=["ask", "hanging?"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert update.message.replies == [
+        "위키 ask 작업을 접수했어요.\n"
+        "job_id=ask-hang\n\n"
+        "결과 확인:\n"
+        "/wiki result ask-hang"
+    ]
+    assert all(reply.strip() for reply in update.message.replies)
+
+
 def test_wiki_job_result_processing_status_returns_processing_message(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
@@ -1338,7 +1474,7 @@ def test_wiki_job_result_expired_status_returns_retry_message(make_update_contex
     asyncio.run(bot.wiki_command(update, context))
 
     assert update.message.replies[-1] == (
-        "위키 작업이 만료되어 결과를 볼 수 없어요. 다시 요청해 주세요. job_id=job-expired"
+        "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
     )
     assert update.message.replies[-1] != "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
 
@@ -1362,7 +1498,7 @@ def test_wiki_job_result_blank_result_uses_safe_fallback(make_update_context, mo
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+    assert update.message.replies[-1] == "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
 
 
 def test_wiki_status_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
