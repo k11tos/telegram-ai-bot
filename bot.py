@@ -737,9 +737,16 @@ def get_user_document_summary_mode(user_id: int) -> str:
     return normalize_document_summary_mode(selected_mode)
 
 
-WIKI_HELP_MESSAGE = (
-    "사용법: /wiki ask <question> | /wiki ingest | /wiki capture <text> | "
-    "/wiki draft <topic> | /wiki status [job_id] | /wiki result <job_id>"
+WIKI_HELP_MESSAGE = "\n".join(
+    [
+        "사용법:",
+        "/wiki ask <question>",
+        "/wiki ingest",
+        "/wiki capture <text>",
+        "/wiki draft <topic>",
+        "/wiki status [job_id]",
+        "/wiki result <job_id>",
+    ]
 )
 
 
@@ -785,7 +792,26 @@ def extract_obsidian_job_id(payload) -> str:
 
 
 def build_wiki_accepted_message(command: str, job_id: str) -> str:
-    return f"위키 {command} 작업을 접수했어요. job_id={job_id}"
+    base_message = f"위키 {command} 작업을 접수했어요.\njob_id={job_id}"
+    if command == "capture":
+        return (
+            f"{base_message}\n\n"
+            "저장 후 검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
+        )
+    if command == "ingest":
+        return f"{base_message}\n\n처리 완료 후:\n/wiki result {job_id}"
+    return f"{base_message}\n\n결과 확인:\n/wiki result {job_id}"
+
+
+def resolve_wiki_auto_result_timeout_seconds() -> int:
+    raw_value = os.getenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "0").strip()
+    if not raw_value:
+        return 0
+    try:
+        return max(0, int(float(raw_value)))
+    except ValueError:
+        logger.warning("invalid_obsidian_wiki_auto_result_timeout_seconds value=%s", raw_value)
+        return 0
 
 
 def build_obsidian_status_message(payload) -> str:
@@ -867,7 +893,7 @@ def build_obsidian_job_result_message(payload: object) -> str:
         return f"위키 작업이 실패했어요. job_id={job_id}"
 
     if normalized_status == "expired":
-        return f"위키 작업이 만료되어 결과를 볼 수 없어요. 다시 요청해 주세요. job_id={job_id}"
+        return "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
 
     result_text = payload.get("result_text")
     rendered = ""
@@ -902,7 +928,7 @@ def build_obsidian_job_result_message(payload: object) -> str:
         rendered = str(result_text).strip()
 
     if not rendered.strip():
-        return "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+        return "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
 
     return rendered
 
@@ -993,7 +1019,41 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요.")
         return
 
+    if subcommand == "ask":
+        auto_result_message = await poll_wiki_ask_result(client, job_id)
+        if auto_result_message is not None:
+            await _send_chunked_message_as_replies(update, auto_result_message)
+            return
+
     await update.message.reply_text(build_wiki_accepted_message(subcommand, job_id))
+
+
+async def poll_wiki_ask_result(client, job_id: str) -> str | None:
+    timeout_seconds = resolve_wiki_auto_result_timeout_seconds()
+    if timeout_seconds <= 0:
+        return None
+
+    path = OBSIDIAN_JOB_DETAIL_PATH_TEMPLATE.format(job_id=job_id)
+    for _ in range(timeout_seconds):
+        await asyncio.sleep(1)
+        request_id = uuid.uuid4().hex[:12]
+        try:
+            response = await client.get(path, headers=build_obsidian_auth_headers(request_id))
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+            logger.warning("obsidian_ask_auto_result_poll_failed job_id=%s error=%s", job_id, error)
+            return None
+
+        if not isinstance(payload, dict):
+            continue
+        status = payload.get("status")
+        normalized_status = status.strip().lower() if isinstance(status, str) else ""
+        if normalized_status in {"queued", "running"}:
+            continue
+        return build_obsidian_job_result_message(payload)
+
+    return None
 
 
 async def wiki_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1044,7 +1104,7 @@ async def wiki_job_result_command(
 
     message = build_obsidian_job_result_message(payload)
     if not message.strip():
-        message = "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+        message = "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
     await _send_chunked_message_as_replies(update, message)
 
 async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
