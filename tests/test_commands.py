@@ -1350,8 +1350,44 @@ def test_wiki_ask_auto_result_polling_immediate_success(make_update_context, mon
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert [call["method"] for call in client.calls] == ["POST", "GET", "POST"]
+    assert client.calls[-1]["path"] == "/obsidian/jobs/ask-fast/notified"
     assert update.message.replies[-1] == "바로 완료"
+
+
+def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+
+    async def fake_send_chunked_message_as_replies(_update, _text):
+        raise RuntimeError("telegram send failed")
+
+    monkeypatch.setattr(bot, "_send_chunked_message_as_replies", fake_send_chunked_message_as_replies)
+    client = FakeObsidianClient(
+        post_payload={"job_id": "ask-send-fail"},
+        get_payloads={
+            "/obsidian/jobs/ask-send-fail": [{
+                "job_id": "ask-send-fail",
+                "status": "succeeded",
+                "result_text": json.dumps({"answer": "바로 완료"}),
+            }]
+        },
+    )
+    update, context = make_update_context(
+        text="/wiki ask now?",
+        client=client,
+        args=["ask", "now?"],
+    )
+
+    try:
+        asyncio.run(bot.wiki_command(update, context))
+    except RuntimeError as error:
+        assert str(error) == "telegram send failed"
+    else:
+        raise AssertionError("expected telegram send failure")
+
+    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert all(not call["path"].endswith("/notified") for call in client.calls)
 
 
 def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update_context, monkeypatch):

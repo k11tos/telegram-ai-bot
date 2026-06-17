@@ -950,6 +950,20 @@ def build_obsidian_job_result_message(payload: object) -> str:
     return rendered
 
 
+async def mark_obsidian_job_notified(client, job_id: str) -> bool:
+    request_id = uuid.uuid4().hex[:12]
+    notify_path = OBSIDIAN_JOB_NOTIFIED_PATH_TEMPLATE.format(job_id=job_id)
+    try:
+        response = await client.post(
+            notify_path,
+            headers=build_obsidian_auth_headers(request_id),
+        )
+        response.raise_for_status()
+    except (httpx.RequestError, httpx.HTTPStatusError) as error:
+        logger.warning("obsidian_mark_notified_failed job_id=%s error=%s", job_id, error)
+        return False
+    return True
+
 async def _send_chunked_message_to_chat(bot_client, chat_id: int | str, text: str) -> None:
     for chunk in split_telegram_text(text):
         await bot_client.send_message(chat_id=chat_id, text=chunk)
@@ -1017,19 +1031,7 @@ async def poll_obsidian_job_notification_once(app) -> bool:
         logger.warning("obsidian_notification_send_failed job_id=%s chat_id=%s error=%s", job_id, chat_id, error)
         return False
 
-    notify_request_id = uuid.uuid4().hex[:12]
-    notify_path = OBSIDIAN_JOB_NOTIFIED_PATH_TEMPLATE.format(job_id=job_id)
-    try:
-        response = await client.post(
-            notify_path,
-            headers=build_obsidian_auth_headers(notify_request_id),
-        )
-        response.raise_for_status()
-    except (httpx.RequestError, httpx.HTTPStatusError) as error:
-        logger.warning("obsidian_notification_mark_notified_failed job_id=%s error=%s", job_id, error)
-        return False
-
-    return True
+    return await mark_obsidian_job_notified(client, job_id)
 
 
 async def obsidian_notification_poll_loop(app) -> None:
@@ -1142,6 +1144,7 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_result_message = await poll_wiki_ask_result(client, job_id)
         if auto_result_message is not None:
             await _send_chunked_message_as_replies(update, auto_result_message)
+            await mark_obsidian_job_notified(client, job_id)
             return
 
     await update.message.reply_text(build_wiki_accepted_message(subcommand, job_id))
