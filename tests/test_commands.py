@@ -1107,7 +1107,7 @@ def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
             },
         }
     ]
-    assert update.message.replies[-1] == "위키 ask 작업을 접수했어요.\njob_id=wiki-1\n\n결과 확인:\n/wiki result wiki-1"
+    assert update.message.replies[-1] == "위키 ask 작업을 접수했어요.\njob_id=wiki-1\n\n완료되면 이 채팅방으로 결과를 보내드릴게요.\n수동 확인: /wiki result wiki-1"
 
 
 def test_wiki_capture_creates_capture_job_with_telegram_source(make_update_context, monkeypatch):
@@ -1126,7 +1126,8 @@ def test_wiki_capture_creates_capture_job_with_telegram_source(make_update_conte
     assert update.message.replies[-1] == (
         "위키 capture 작업을 접수했어요.\n"
         "job_id=cap-1\n\n"
-        "저장 후 검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
+        "저장 완료 후 이 채팅방으로 알려드릴게요.\n"
+        "검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
     )
 
 
@@ -1182,7 +1183,7 @@ def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
 
     assert client.calls[0]["json"]["command"] == "ingest"
     assert client.calls[0]["json"]["payload"] == {}
-    assert update.message.replies[-1] == "위키 ingest 작업을 접수했어요.\njob_id=55\n\n처리 완료 후:\n/wiki result 55"
+    assert update.message.replies[-1] == "위키 ingest 작업을 접수했어요.\njob_id=55\n\n완료되면 이 채팅방으로 결과를 보내드릴게요.\n수동 확인: /wiki result 55"
 
 
 def test_wiki_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
@@ -1349,8 +1350,44 @@ def test_wiki_ask_auto_result_polling_immediate_success(make_update_context, mon
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert [call["method"] for call in client.calls] == ["POST", "GET", "POST"]
+    assert client.calls[-1]["path"] == "/obsidian/jobs/ask-fast/notified"
     assert update.message.replies[-1] == "바로 완료"
+
+
+def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+
+    async def fake_send_chunked_message_as_replies(_update, _text):
+        raise RuntimeError("telegram send failed")
+
+    monkeypatch.setattr(bot, "_send_chunked_message_as_replies", fake_send_chunked_message_as_replies)
+    client = FakeObsidianClient(
+        post_payload={"job_id": "ask-send-fail"},
+        get_payloads={
+            "/obsidian/jobs/ask-send-fail": [{
+                "job_id": "ask-send-fail",
+                "status": "succeeded",
+                "result_text": json.dumps({"answer": "바로 완료"}),
+            }]
+        },
+    )
+    update, context = make_update_context(
+        text="/wiki ask now?",
+        client=client,
+        args=["ask", "now?"],
+    )
+
+    try:
+        asyncio.run(bot.wiki_command(update, context))
+    except RuntimeError as error:
+        assert str(error) == "telegram send failed"
+    else:
+        raise AssertionError("expected telegram send failure")
+
+    assert [call["method"] for call in client.calls] == ["POST", "GET"]
+    assert all(not call["path"].endswith("/notified") for call in client.calls)
 
 
 def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update_context, monkeypatch):
@@ -1379,8 +1416,8 @@ def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update
     assert update.message.replies[-1] == (
         "위키 ask 작업을 접수했어요.\n"
         "job_id=ask-slow\n\n"
-        "결과 확인:\n"
-        "/wiki result ask-slow"
+        "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
+        "수동 확인: /wiki result ask-slow"
     )
 
 
@@ -1406,8 +1443,8 @@ def test_wiki_ask_auto_result_polling_slow_detail_falls_back_to_accepted_message
     assert update.message.replies == [
         "위키 ask 작업을 접수했어요.\n"
         "job_id=ask-hang\n\n"
-        "결과 확인:\n"
-        "/wiki result ask-hang"
+        "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
+        "수동 확인: /wiki result ask-hang"
     ]
     assert all(reply.strip() for reply in update.message.replies)
 
@@ -1521,3 +1558,138 @@ def test_wiki_status_disallowed_user_does_not_call_gateway(make_update_context, 
 
     assert client.calls == []
     assert update.message.replies[-1] == bot.build_wiki_denied_message(123)
+
+class FakeTelegramBot:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.sent_messages = []
+
+    async def send_message(self, chat_id, text):
+        if self.fail:
+            raise RuntimeError("telegram down")
+        self.sent_messages.append({"chat_id": chat_id, "text": text})
+
+
+def make_fake_app(client, telegram_bot=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        bot_data={bot.HTTP_CLIENT_KEY: client},
+        bot=telegram_bot or FakeTelegramBot(),
+    )
+
+
+def test_init_http_client_registers_obsidian_notification_polling_task(monkeypatch):
+    from types import SimpleNamespace
+
+    fake_task = object()
+    started = []
+
+    async def fake_load_gateway_presets(_app):
+        return None
+
+    def fake_create_task(coro):
+        coro.close()
+        started.append(True)
+        return fake_task
+
+    monkeypatch.setattr(bot, "AI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setattr(bot, "load_gateway_presets", fake_load_gateway_presets)
+    monkeypatch.setattr(bot.asyncio, "create_task", fake_create_task)
+    app = SimpleNamespace(bot_data={})
+
+    asyncio.run(bot.init_http_client(app))
+
+    assert started == [True]
+    assert app.bot_data[bot.OBSIDIAN_NOTIFICATION_TASK_KEY] is fake_task
+    asyncio.run(app.bot_data[bot.HTTP_CLIENT_KEY].aclose())
+
+
+def test_obsidian_notification_poll_fetches_next_completed_job(monkeypatch):
+    monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "notify-token")
+    client = FakeObsidianClient(get_payload={})
+    app = make_fake_app(client)
+
+    asyncio.run(bot.poll_obsidian_job_notification_once(app))
+
+    assert client.calls == [{
+        "method": "GET",
+        "path": bot.OBSIDIAN_NOTIFICATIONS_NEXT_PATH,
+        "headers": {
+            "X-Request-Id": client.calls[0]["headers"]["X-Request-Id"],
+            "Authorization": "Bearer notify-token",
+        },
+    }]
+
+
+def test_obsidian_notification_succeeded_job_sends_rendered_answer_and_marks_notified(monkeypatch):
+    monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "notify-token")
+    client = FakeObsidianClient(get_payload={
+        "job_id": "job-100",
+        "status": "succeeded",
+        "telegram_chat_id": 777,
+        "result_text": json.dumps({"answer": "완료 답변", "references": ["A.md"]}),
+    })
+    telegram_bot = FakeTelegramBot()
+    app = make_fake_app(client, telegram_bot)
+
+    delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
+
+    assert delivered is True
+    assert telegram_bot.sent_messages == [{"chat_id": 777, "text": "완료 답변\n\n참고:\n- A.md"}]
+    assert client.calls[-1]["method"] == "POST"
+    assert client.calls[-1]["path"] == "/obsidian/jobs/job-100/notified"
+
+
+def test_obsidian_notification_failed_job_sends_error_and_marks_notified():
+    client = FakeObsidianClient(get_payload={
+        "job_id": "job-fail",
+        "status": "failed",
+        "telegram_chat_id": 888,
+        "error_text": "worker timeout",
+    })
+    telegram_bot = FakeTelegramBot()
+    app = make_fake_app(client, telegram_bot)
+
+    delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
+
+    assert delivered is True
+    assert telegram_bot.sent_messages == [{
+        "chat_id": 888,
+        "text": "위키 작업이 실패했어요. job_id=job-fail\n오류: worker timeout",
+    }]
+    assert client.calls[-1]["path"] == "/obsidian/jobs/job-fail/notified"
+
+
+def test_obsidian_notification_send_failure_does_not_mark_notified(caplog):
+    client = FakeObsidianClient(get_payload={
+        "job_id": "job-send-fail",
+        "status": "succeeded",
+        "telegram_chat_id": 999,
+        "result_text": "hello",
+    })
+    app = make_fake_app(client, FakeTelegramBot(fail=True))
+
+    with caplog.at_level("WARNING"):
+        delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
+
+    assert delivered is False
+    assert [call["method"] for call in client.calls] == ["GET"]
+    assert "obsidian_notification_send_failed" in caplog.text
+
+
+def test_obsidian_notification_empty_response_sends_nothing():
+    client = FakeObsidianClient(get_payload=None)
+    telegram_bot = FakeTelegramBot()
+    app = make_fake_app(client, telegram_bot)
+
+    delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
+
+    assert delivered is False
+    assert telegram_bot.sent_messages == []
+    assert [call["method"] for call in client.calls] == ["GET"]
+
+
+def test_wiki_accepted_messages_mention_automatic_delivery():
+    assert "완료되면 이 채팅방으로 결과를 보내드릴게요." in bot.build_wiki_accepted_message("ask", "a1")
+    assert "저장 완료 후 이 채팅방으로 알려드릴게요." in bot.build_wiki_accepted_message("capture", "c1")

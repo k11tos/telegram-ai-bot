@@ -70,6 +70,8 @@ AI_GATEWAY_PRESETS_PATH = "/presets"
 AI_GATEWAY_READY_PATH = "/health/ready"
 OBSIDIAN_JOBS_PATH = "/obsidian/jobs"
 OBSIDIAN_JOB_DETAIL_PATH_TEMPLATE = "/obsidian/jobs/{job_id}"
+OBSIDIAN_NOTIFICATIONS_NEXT_PATH = "/obsidian/jobs/notifications/next"
+OBSIDIAN_JOB_NOTIFIED_PATH_TEMPLATE = "/obsidian/jobs/{job_id}/notified"
 OBSIDIAN_STATUS_PATH = "/obsidian/status"
 MAX_KEEPALIVE_CONNECTIONS = int(os.getenv("MAX_KEEPALIVE_CONNECTIONS", "20"))
 MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "100"))
@@ -185,6 +187,7 @@ if DEFAULT_PRESET not in STATIC_PRESET_DEFINITIONS:
 MAX_HISTORY = 10
 DEFAULT_SESSION_NAME = "default"
 HTTP_CLIENT_KEY = "http_client"
+OBSIDIAN_NOTIFICATION_TASK_KEY = "obsidian_notification_task"
 TELEGRAM_MESSAGE_MAX_LEN = 4096
 BLANK_AI_RESPONSE_MESSAGE = "AI 서버가 빈 응답을 반환했어요. 잠시 후 다시 시도해주세요."
 
@@ -796,11 +799,25 @@ def build_wiki_accepted_message(command: str, job_id: str) -> str:
     if command == "capture":
         return (
             f"{base_message}\n\n"
-            "저장 후 검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
+            "저장 완료 후 이 채팅방으로 알려드릴게요.\n"
+            "검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
         )
-    if command == "ingest":
-        return f"{base_message}\n\n처리 완료 후:\n/wiki result {job_id}"
-    return f"{base_message}\n\n결과 확인:\n/wiki result {job_id}"
+    return (
+        f"{base_message}\n\n"
+        "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
+        f"수동 확인: /wiki result {job_id}"
+    )
+
+
+def resolve_obsidian_notification_poll_seconds() -> float:
+    raw_value = os.getenv("OBSIDIAN_NOTIFICATION_POLL_SECONDS", "5").strip()
+    if not raw_value:
+        return 5.0
+    try:
+        return max(0.1, float(raw_value))
+    except ValueError:
+        logger.warning("invalid_obsidian_notification_poll_seconds value=%s", raw_value)
+        return 5.0
 
 
 def resolve_wiki_auto_result_timeout_seconds() -> int:
@@ -933,6 +950,110 @@ def build_obsidian_job_result_message(payload: object) -> str:
     return rendered
 
 
+async def mark_obsidian_job_notified(client, job_id: str) -> bool:
+    request_id = uuid.uuid4().hex[:12]
+    notify_path = OBSIDIAN_JOB_NOTIFIED_PATH_TEMPLATE.format(job_id=job_id)
+    try:
+        response = await client.post(
+            notify_path,
+            headers=build_obsidian_auth_headers(request_id),
+        )
+        response.raise_for_status()
+    except (httpx.RequestError, httpx.HTTPStatusError) as error:
+        logger.warning("obsidian_mark_notified_failed job_id=%s error=%s", job_id, error)
+        return False
+    return True
+
+async def _send_chunked_message_to_chat(bot_client, chat_id: int | str, text: str) -> None:
+    for chunk in split_telegram_text(text):
+        await bot_client.send_message(chat_id=chat_id, text=chunk)
+
+
+def extract_obsidian_telegram_chat_id(payload: object) -> int | str | None:
+    if not isinstance(payload, dict):
+        return None
+    chat_id = payload.get("telegram_chat_id")
+    if isinstance(chat_id, int):
+        return chat_id
+    if isinstance(chat_id, str) and chat_id.strip():
+        normalized = chat_id.strip()
+        try:
+            return int(normalized)
+        except ValueError:
+            return normalized
+    return None
+
+
+async def poll_obsidian_job_notification_once(app) -> bool:
+    client = app.bot_data.get(HTTP_CLIENT_KEY)
+    if client is None:
+        logger.warning("obsidian_notification_poll_missing_http_client")
+        return False
+
+    request_id = uuid.uuid4().hex[:12]
+    try:
+        response = await client.get(
+            OBSIDIAN_NOTIFICATIONS_NEXT_PATH,
+            headers=build_obsidian_auth_headers(request_id),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
+        logger.warning("obsidian_notification_poll_failed request_id=%s error=%s", request_id, error)
+        return False
+
+    if not payload:
+        return False
+    if isinstance(payload, dict) and isinstance(payload.get("job"), dict):
+        payload = payload["job"]
+    if not isinstance(payload, dict):
+        logger.warning("obsidian_notification_unexpected_payload request_id=%s", request_id)
+        return False
+
+    job_id = extract_obsidian_job_id(payload)
+    chat_id = extract_obsidian_telegram_chat_id(payload)
+    if chat_id is None:
+        logger.warning("obsidian_notification_missing_chat_id job_id=%s", job_id)
+        return False
+
+    try:
+        message = build_obsidian_job_result_message(payload)
+    except Exception as error:  # Defensive fallback so one malformed result does not block notification forever.
+        logger.warning("obsidian_notification_render_failed job_id=%s error=%s", job_id, error)
+        message = f"위키 작업이 완료됐어요. job_id={job_id}\n결과를 표시하지 못했어요. /wiki result {job_id} 로 확인해 주세요."
+
+    if not message.strip():
+        message = f"위키 작업이 완료됐어요. job_id={job_id}\n결과가 비어 있어요."
+
+    try:
+        await _send_chunked_message_to_chat(app.bot, chat_id, message)
+    except Exception as error:
+        logger.warning("obsidian_notification_send_failed job_id=%s chat_id=%s error=%s", job_id, chat_id, error)
+        return False
+
+    return await mark_obsidian_job_notified(client, job_id)
+
+
+async def obsidian_notification_poll_loop(app) -> None:
+    interval_seconds = resolve_obsidian_notification_poll_seconds()
+    logger.info("obsidian_notification_poll_started interval_seconds=%s", interval_seconds)
+    try:
+        while True:
+            await poll_obsidian_job_notification_once(app)
+            await asyncio.sleep(interval_seconds)
+    except asyncio.CancelledError:
+        logger.info("obsidian_notification_poll_stopped")
+        raise
+
+
+def start_obsidian_notification_polling(app) -> None:
+    if app.bot_data.get(OBSIDIAN_NOTIFICATION_TASK_KEY) is not None:
+        return
+    app.bot_data[OBSIDIAN_NOTIFICATION_TASK_KEY] = asyncio.create_task(
+        obsidian_notification_poll_loop(app)
+    )
+
+
 async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -1023,6 +1144,7 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_result_message = await poll_wiki_ask_result(client, job_id)
         if auto_result_message is not None:
             await _send_chunked_message_as_replies(update, auto_result_message)
+            await mark_obsidian_job_notified(client, job_id)
             return
 
     await update.message.reply_text(build_wiki_accepted_message(subcommand, job_id))
@@ -1951,9 +2073,18 @@ async def init_http_client(app):
         limits=limits,
     )
     await load_gateway_presets(app)
+    start_obsidian_notification_polling(app)
 
 
 async def close_http_client(app):
+    notification_task = app.bot_data.pop(OBSIDIAN_NOTIFICATION_TASK_KEY, None)
+    if notification_task is not None:
+        notification_task.cancel()
+        try:
+            await notification_task
+        except asyncio.CancelledError:
+            pass
+
     client = app.bot_data.pop(HTTP_CLIENT_KEY, None)
     if client is not None:
         await client.aclose()
