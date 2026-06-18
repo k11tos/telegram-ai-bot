@@ -39,7 +39,8 @@ def build_state_payload(
         "version": 1,
         "conversations": serialized_conversations,
         "active_sessions": {
-            str(user_id): session_name for user_id, session_name in user_active_sessions.items()
+            str(user_id): session_name
+            for user_id, session_name in user_active_sessions.items()
         },
         "selected_models": {
             str(user_id): model for user_id, model in user_selected_models.items()
@@ -107,36 +108,53 @@ def load_bot_state(
             else:
                 raw_conversations = payload.get("conversations", {})
                 if isinstance(raw_conversations, dict):
-                    normalized_conversations = _normalize_int_key_mapping(raw_conversations)
+                    normalized_conversations = _normalize_int_key_mapping(
+                        raw_conversations
+                    )
                     for user_id, raw_history in normalized_conversations.items():
                         per_session_histories: dict[str, list[str]] = {}
                         if isinstance(raw_history, list):
-                            cleaned_history = [line for line in raw_history if isinstance(line, str)]
-                            per_session_histories[default_session_name] = cleaned_history[-max_history:]
+                            cleaned_history = [
+                                line for line in raw_history if isinstance(line, str)
+                            ]
+                            per_session_histories[default_session_name] = (
+                                cleaned_history[-max_history:]
+                            )
                         elif isinstance(raw_history, dict):
-                            for raw_session_name, session_history in raw_history.items():
-                                if not isinstance(raw_session_name, str) or not isinstance(
-                                    session_history, list
-                                ):
+                            for (
+                                raw_session_name,
+                                session_history,
+                            ) in raw_history.items():
+                                if not isinstance(
+                                    raw_session_name, str
+                                ) or not isinstance(session_history, list):
                                     continue
-                                normalized_session_name = normalize_session_name(raw_session_name)
+                                normalized_session_name = normalize_session_name(
+                                    raw_session_name
+                                )
                                 cleaned_history = [
-                                    line for line in session_history if isinstance(line, str)
+                                    line
+                                    for line in session_history
+                                    if isinstance(line, str)
                                 ]
-                                per_session_histories[normalized_session_name] = cleaned_history[
-                                    -max_history:
-                                ]
+                                per_session_histories[normalized_session_name] = (
+                                    cleaned_history[-max_history:]
+                                )
 
                         if per_session_histories:
                             loaded_conversations[user_id] = per_session_histories
 
                 raw_active_sessions = payload.get("active_sessions", {})
                 if isinstance(raw_active_sessions, dict):
-                    normalized_active_sessions = _normalize_int_key_mapping(raw_active_sessions)
+                    normalized_active_sessions = _normalize_int_key_mapping(
+                        raw_active_sessions
+                    )
                     for user_id, raw_session_name in normalized_active_sessions.items():
                         if not isinstance(raw_session_name, str):
                             continue
-                        loaded_active_sessions[user_id] = normalize_session_name(raw_session_name)
+                        loaded_active_sessions[user_id] = normalize_session_name(
+                            raw_session_name
+                        )
 
                 raw_models = payload.get("selected_models", {})
                 if isinstance(raw_models, dict):

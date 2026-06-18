@@ -8,7 +8,10 @@ import bot
 
 def test_reset_command_clears_conversation_and_replies(make_update_context):
     user_id = 42
-    bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = ["User: hi", "AI: hello"]
+    bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = [
+        "User: hi",
+        "AI: hello",
+    ]
     bot.user_reset_tokens[user_id] = {bot.DEFAULT_SESSION_NAME: 7}
 
     update, context = make_update_context(user_id=user_id, text="/reset", client=None)
@@ -142,13 +145,14 @@ def test_help_command_includes_session_clear_command(make_update_context):
 
 def test_docmode_command_shows_default_mode_when_unset(make_update_context):
     user_id = 900
-    update, context = make_update_context(user_id=user_id, text="/docmode", client=None, args=[])
+    update, context = make_update_context(
+        user_id=user_id, text="/docmode", client=None, args=[]
+    )
 
     asyncio.run(bot.docmode_command(update, context))
 
     assert update.message.replies[-1] == (
-        "현재 문서 요약 모드: summary\n"
-        f"사용 가능: {bot.DOCUMENT_SUMMARY_MODES_TEXT}"
+        f"현재 문서 요약 모드: summary\n사용 가능: {bot.DOCUMENT_SUMMARY_MODES_TEXT}"
     )
 
 
@@ -193,7 +197,9 @@ def test_health_command_reports_gateway_ready(make_update_context):
     assert update.message.replies[-1] == "게이트웨이가 정상적으로 준비되어 있어요."
 
 
-def test_health_command_treats_http_200_as_ready_without_body_inspection(make_update_context):
+def test_health_command_treats_http_200_as_ready_without_body_inspection(
+    make_update_context,
+):
     client = FakeModelsClient(json_error=ValueError("invalid payload"))
     update, context = make_update_context(text="/health", client=client)
 
@@ -209,19 +215,25 @@ def test_health_command_handles_gateway_failure(make_update_context):
 
     asyncio.run(bot.health_command(update, context))
 
-    assert update.message.replies[-1] == "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+    assert (
+        update.message.replies[-1] == "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+    )
 
 
 def test_health_command_handles_gateway_status_error(make_update_context):
     request = httpx.Request("GET", "http://test/health/ready")
     response = httpx.Response(503, request=request)
-    status_error = httpx.HTTPStatusError("service unavailable", request=request, response=response)
+    status_error = httpx.HTTPStatusError(
+        "service unavailable", request=request, response=response
+    )
     client = FakeModelsClient(status_error=status_error)
     update, context = make_update_context(text="/health", client=client)
 
     asyncio.run(bot.health_command(update, context))
 
-    assert update.message.replies[-1] == "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+    assert (
+        update.message.replies[-1] == "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+    )
 
 
 def test_health_command_handles_missing_client(make_update_context):
@@ -229,7 +241,10 @@ def test_health_command_handles_missing_client(make_update_context):
 
     asyncio.run(bot.health_command(update, context))
 
-    assert update.message.replies[-1] == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+    assert (
+        update.message.replies[-1]
+        == "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+    )
 
 
 def test_model_command_shows_selected_model(make_update_context):
@@ -252,7 +267,9 @@ def test_model_command_shows_default_behavior_when_unset(make_update_context):
 
 def test_model_command_sets_selected_model_when_valid(make_update_context):
     user_id = 88
-    client = FakeModelsClient(payload={"models": [{"id": "gpt-4o-mini"}, {"id": "claude-3-5"}]})
+    client = FakeModelsClient(
+        payload={"models": [{"id": "gpt-4o-mini"}, {"id": "claude-3-5"}]}
+    )
     update, context = make_update_context(
         user_id=user_id,
         text="/model gpt-4o-mini",
@@ -288,7 +305,9 @@ def test_model_command_rejects_invalid_model_name(make_update_context):
 
 
 def test_model_command_handles_missing_client_when_setting(make_update_context):
-    update, context = make_update_context(text="/model gpt-4o-mini", client=None, args=["gpt-4o-mini"])
+    update, context = make_update_context(
+        text="/model gpt-4o-mini", client=None, args=["gpt-4o-mini"]
+    )
 
     asyncio.run(bot.model_command(update, context))
 
@@ -298,34 +317,49 @@ def test_model_command_handles_missing_client_when_setting(make_update_context):
 def test_model_command_resets_selected_model_with_default_alias(make_update_context):
     user_id = 90
     bot.user_selected_models[user_id] = "gpt-4o-mini"
-    update, context = make_update_context(user_id=user_id, text="/model default", client=None, args=["default"])
+    update, context = make_update_context(
+        user_id=user_id, text="/model default", client=None, args=["default"]
+    )
 
     asyncio.run(bot.model_command(update, context))
 
     assert bot.user_selected_models.get(user_id) is None
-    assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+    assert (
+        update.message.replies[-1]
+        == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+    )
 
 
 def test_model_command_resets_selected_model_with_reset_alias(make_update_context):
     user_id = 91
     bot.user_selected_models[user_id] = "claude-3-5"
-    update, context = make_update_context(user_id=user_id, text="/model reset", client=None, args=["reset"])
+    update, context = make_update_context(
+        user_id=user_id, text="/model reset", client=None, args=["reset"]
+    )
 
     asyncio.run(bot.model_command(update, context))
 
     assert bot.user_selected_models.get(user_id) is None
-    assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+    assert (
+        update.message.replies[-1]
+        == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+    )
 
 
 def test_model_command_resets_selected_model_with_mixed_case_alias(make_update_context):
     user_id = 92
     bot.user_selected_models[user_id] = "gpt-4o-mini"
-    update, context = make_update_context(user_id=user_id, text="/model DEFAULT", client=None, args=["DEFAULT"])
+    update, context = make_update_context(
+        user_id=user_id, text="/model DEFAULT", client=None, args=["DEFAULT"]
+    )
 
     asyncio.run(bot.model_command(update, context))
 
     assert bot.user_selected_models.get(user_id) is None
-    assert update.message.replies[-1] == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+    assert (
+        update.message.replies[-1]
+        == "모델 설정을 초기화했습니다. 기본 모델을 사용합니다."
+    )
 
 
 def test_preset_command_shows_default_when_unset(make_update_context):
@@ -360,7 +394,9 @@ def test_preset_command_sets_supported_preset(make_update_context):
     assert update.message.replies[-1] == "프리셋이 변경되었습니다: english"
 
 
-def test_preset_command_sets_supported_preset_with_case_normalization(make_update_context):
+def test_preset_command_sets_supported_preset_with_case_normalization(
+    make_update_context,
+):
     user_id = 97
     update, context = make_update_context(
         user_id=user_id,
@@ -388,7 +424,8 @@ def test_preset_command_rejects_unsupported_preset(make_update_context):
 
     assert bot.user_selected_presets.get(user_id) is None
     assert update.message.replies[-1] == (
-        "지원하지 않는 프리셋입니다. 사용 가능: " + ", ".join(bot.get_static_presets().keys())
+        "지원하지 않는 프리셋입니다. 사용 가능: "
+        + ", ".join(bot.get_static_presets().keys())
     )
 
 
@@ -530,10 +567,26 @@ def test_reload_presets_command_updates_presets_from_gateway(make_update_context
     client = FakeModelsClient(
         payload={
             "presets": [
-                {"name": "normal", "description": "Balanced assistant for general use.", "prompt_prefix": ""},
-                {"name": "coder", "description": "Focused on programming and debugging tasks.", "prompt_prefix": "You are a practical coding assistant. Be precise and production-minded.\n\n"},
-                {"name": "english", "description": "Helps improve English writing and grammar.", "prompt_prefix": "You are an English writing helper. Improve clarity, grammar, and tone.\n\n"},
-                {"name": "quant", "description": "Supports quantitative and analytical reasoning.", "prompt_prefix": "You are a quantitative reasoning assistant. Show concise, correct math.\n\n"},
+                {
+                    "name": "normal",
+                    "description": "Balanced assistant for general use.",
+                    "prompt_prefix": "",
+                },
+                {
+                    "name": "coder",
+                    "description": "Focused on programming and debugging tasks.",
+                    "prompt_prefix": "You are a practical coding assistant. Be precise and production-minded.\n\n",
+                },
+                {
+                    "name": "english",
+                    "description": "Helps improve English writing and grammar.",
+                    "prompt_prefix": "You are an English writing helper. Improve clarity, grammar, and tone.\n\n",
+                },
+                {
+                    "name": "quant",
+                    "description": "Supports quantitative and analytical reasoning.",
+                    "prompt_prefix": "You are a quantitative reasoning assistant. Show concise, correct math.\n\n",
+                },
             ]
         }
     )
@@ -541,10 +594,15 @@ def test_reload_presets_command_updates_presets_from_gateway(make_update_context
 
     asyncio.run(bot.reload_presets_command(update, context))
 
-    assert update.message.replies[-1] == "프리셋을 다시 불러왔습니다: normal, coder, english, quant"
+    assert (
+        update.message.replies[-1]
+        == "프리셋을 다시 불러왔습니다: normal, coder, english, quant"
+    )
 
 
-def test_reload_presets_command_falls_back_safely_on_gateway_failure(make_update_context):
+def test_reload_presets_command_falls_back_safely_on_gateway_failure(
+    make_update_context,
+):
     request = httpx.Request("GET", "http://test/presets")
     client = FakeModelsClient(get_error=httpx.RequestError("down", request=request))
     update, context = make_update_context(text="/reload_presets", client=client)
@@ -552,18 +610,27 @@ def test_reload_presets_command_falls_back_safely_on_gateway_failure(make_update
     asyncio.run(bot.reload_presets_command(update, context))
 
     assert context.application.bot_data[bot.PRESETS_KEY] == bot.get_static_presets()
-    assert update.message.replies[-1] == "게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다."
+    assert (
+        update.message.replies[-1]
+        == "게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다."
+    )
 
 
 def test_preset_command_uses_refreshed_values_after_reload(make_update_context):
     client = FakeModelsClient(
         payload={
             "presets": [
-                {"name": "research", "description": "Research", "prompt_prefix": "Preset: research.\n\n"}
+                {
+                    "name": "research",
+                    "description": "Research",
+                    "prompt_prefix": "Preset: research.\n\n",
+                }
             ]
         }
     )
-    reload_update, reload_context = make_update_context(text="/reload_presets", client=client)
+    reload_update, reload_context = make_update_context(
+        text="/reload_presets", client=client
+    )
 
     asyncio.run(bot.reload_presets_command(reload_update, reload_context))
 
@@ -578,16 +645,14 @@ def test_preset_command_uses_refreshed_values_after_reload(make_update_context):
 
     assert preset_update.message.replies[-1] == "프리셋이 변경되었습니다: research"
 
+
 def test_session_command_no_arg_single_session(make_update_context):
     update, context = make_update_context(text="/session", client=None)
 
     asyncio.run(bot.session_command(update, context))
 
     assert update.message.replies[-1] == (
-        "현재 세션: default\n"
-        "전체 세션 수: 1\n\n"
-        "보유한 세션:\n"
-        "- default"
+        "현재 세션: default\n전체 세션 수: 1\n\n보유한 세션:\n- default"
     )
 
 
@@ -601,17 +666,15 @@ def test_session_command_no_arg_multiple_sessions(make_update_context):
     asyncio.run(bot.session_command(update, context))
 
     assert update.message.replies[-1] == (
-        "현재 세션: trading\n"
-        "전체 세션 수: 2\n\n"
-        "보유한 세션:\n"
-        "- coding\n"
-        "- trading"
+        "현재 세션: trading\n전체 세션 수: 2\n\n보유한 세션:\n- coding\n- trading"
     )
 
 
 def test_session_command_switches_session(make_update_context):
     user_id = 321
-    update, context = make_update_context(user_id=user_id, text="/session work", client=None, args=["work"])
+    update, context = make_update_context(
+        user_id=user_id, text="/session work", client=None, args=["work"]
+    )
 
     asyncio.run(bot.session_command(update, context))
 
@@ -623,13 +686,14 @@ def test_session_command_switches_session(make_update_context):
 def test_session_command_switches_to_trimmed_name(make_update_context):
     user_id = 322
     long_name = "x" * 50
-    update, context = make_update_context(user_id=user_id, text=f"/session {long_name}", client=None, args=[long_name])
+    update, context = make_update_context(
+        user_id=user_id, text=f"/session {long_name}", client=None, args=[long_name]
+    )
 
     asyncio.run(bot.session_command(update, context))
 
     assert bot.user_active_sessions[user_id] == "x" * 32
     assert update.message.replies[-1] == f"세션 변경: {'x' * 32}"
-
 
 
 class FakeGetResponse:
@@ -674,7 +738,9 @@ class FakeModelsClient:
 
 
 def test_models_command_fetches_gateway_models(make_update_context):
-    client = FakeModelsClient(payload={"models": [{"id": "gpt-4o-mini"}, {"id": "claude-3-5"}]})
+    client = FakeModelsClient(
+        payload={"models": [{"id": "gpt-4o-mini"}, {"id": "claude-3-5"}]}
+    )
     update, context = make_update_context(text="/models", client=client)
 
     asyncio.run(bot.models_command(update, context))
@@ -684,7 +750,10 @@ def test_models_command_fetches_gateway_models(make_update_context):
     assert "X-Request-Id" in client.calls[0]["headers"]
     assert isinstance(client.calls[0]["headers"]["X-Request-Id"], str)
     assert client.calls[0]["headers"]["X-Request-Id"]
-    assert update.message.replies[-1] == "사용 가능한 모델 목록\n- gpt-4o-mini\n- claude-3-5"
+    assert (
+        update.message.replies[-1]
+        == "사용 가능한 모델 목록\n- gpt-4o-mini\n- claude-3-5"
+    )
 
 
 def test_models_command_handles_gateway_failure(make_update_context):
@@ -694,21 +763,27 @@ def test_models_command_handles_gateway_failure(make_update_context):
 
     asyncio.run(bot.models_command(update, context))
 
-    assert update.message.replies[-1] == "죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요."
-
-
+    assert (
+        update.message.replies[-1]
+        == "죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+    )
 
 
 def test_models_command_handles_gateway_status_error(make_update_context):
     request = httpx.Request("GET", "http://test/models")
     response = httpx.Response(503, request=request)
-    status_error = httpx.HTTPStatusError("service unavailable", request=request, response=response)
+    status_error = httpx.HTTPStatusError(
+        "service unavailable", request=request, response=response
+    )
     client = FakeModelsClient(status_error=status_error)
     update, context = make_update_context(text="/models", client=client)
 
     asyncio.run(bot.models_command(update, context))
 
-    assert update.message.replies[-1] == "죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+    assert (
+        update.message.replies[-1]
+        == "죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+    )
 
 
 def test_models_command_handles_missing_client(make_update_context):
@@ -716,7 +791,9 @@ def test_models_command_handles_missing_client(make_update_context):
 
     asyncio.run(bot.models_command(update, context))
 
-    assert update.message.replies[-1] == "죄송해요. 지금은 모델 목록을 가져올 수 없어요."
+    assert (
+        update.message.replies[-1] == "죄송해요. 지금은 모델 목록을 가져올 수 없어요."
+    )
 
 
 def test_main_registers_health_command_handler(monkeypatch):
@@ -860,7 +937,9 @@ def test_load_bot_state_restores_saved_values(tmp_path, monkeypatch):
     assert bot.user_document_summary_modes[123] == "bullets"
 
 
-def test_load_bot_state_normalizes_invalid_document_mode_to_default(tmp_path, monkeypatch):
+def test_load_bot_state_normalizes_invalid_document_mode_to_default(
+    tmp_path, monkeypatch
+):
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "bot_state.json"
@@ -932,7 +1011,9 @@ def test_main_loads_state_before_running(monkeypatch):
     assert called["load"] is True
 
 
-def test_load_bot_state_replaces_existing_state_instead_of_merging(tmp_path, monkeypatch):
+def test_load_bot_state_replaces_existing_state_instead_of_merging(
+    tmp_path, monkeypatch
+):
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "bot_state.json"
@@ -949,7 +1030,9 @@ def test_load_bot_state_replaces_existing_state_instead_of_merging(tmp_path, mon
 
     bot.load_bot_state()
 
-    assert bot.conversations == {2: {bot.DEFAULT_SESSION_NAME: ["User: new", "AI: value"]}}
+    assert bot.conversations == {
+        2: {bot.DEFAULT_SESSION_NAME: ["User: new", "AI: value"]}
+    }
     assert bot.user_selected_models == {2: "new-model"}
     assert bot.user_selected_presets == {2: "english"}
 
@@ -989,7 +1072,9 @@ def test_load_bot_state_trims_and_filters_history_entries(tmp_path, monkeypatch)
     assert bot.get_session_history(3) == valid_lines[-bot.MAX_HISTORY :]
 
 
-def test_load_bot_state_normalizes_presets_and_strips_model_values(tmp_path, monkeypatch):
+def test_load_bot_state_normalizes_presets_and_strips_model_values(
+    tmp_path, monkeypatch
+):
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "bot_state.json"
@@ -1038,6 +1123,7 @@ def test_load_bot_state_missing_file_clears_persisted_state(tmp_path, monkeypatc
     assert bot.user_selected_models == {}
     assert bot.user_selected_presets == {}
 
+
 class FakeObsidianClient:
     def __init__(
         self,
@@ -1048,11 +1134,17 @@ class FakeObsidianClient:
         get_error=None,
         status_error=None,
     ):
-        self.post_payload = post_payload if post_payload is not None else {"job_id": "job-123"}
-        self.get_payload = get_payload if get_payload is not None else {
-            "queue": {"pending": 1, "running": 0, "completed": 2, "failed": 0},
-            "worker": {"status": "online"},
-        }
+        self.post_payload = (
+            post_payload if post_payload is not None else {"job_id": "job-123"}
+        )
+        self.get_payload = (
+            get_payload
+            if get_payload is not None
+            else {
+                "queue": {"pending": 1, "running": 0, "completed": 2, "failed": 0},
+                "worker": {"status": "online"},
+            }
+        )
         self.get_payloads = get_payloads or {}
         self.post_error = post_error
         self.get_error = get_error
@@ -1060,10 +1152,14 @@ class FakeObsidianClient:
         self.calls = []
 
     async def post(self, path, json=None, headers=None):
-        self.calls.append({"method": "POST", "path": path, "json": json, "headers": headers})
+        self.calls.append(
+            {"method": "POST", "path": path, "json": json, "headers": headers}
+        )
         if self.post_error is not None:
             raise self.post_error
-        return FakeGetResponse(payload=self.post_payload, status_error=self.status_error)
+        return FakeGetResponse(
+            payload=self.post_payload, status_error=self.status_error
+        )
 
     async def get(self, path, headers=None):
         self.calls.append({"method": "GET", "path": path, "headers": headers})
@@ -1075,7 +1171,9 @@ class FakeObsidianClient:
         return FakeGetResponse(payload=payload, status_error=self.status_error)
 
 
-def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
+def test_wiki_ask_creates_job_without_accepted_message_by_default(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "secret-token")
     client = FakeObsidianClient(post_payload={"job_id": "wiki-1"})
@@ -1107,10 +1205,12 @@ def test_wiki_allowed_user_can_create_job(make_update_context, monkeypatch):
             },
         }
     ]
-    assert update.message.replies[-1] == "위키 ask 작업을 접수했어요.\njob_id=wiki-1\n\n완료되면 이 채팅방으로 결과를 보내드릴게요.\n수동 확인: /wiki result wiki-1"
+    assert update.message.replies == []
 
 
-def test_wiki_capture_creates_capture_job_with_telegram_source(make_update_context, monkeypatch):
+def test_wiki_capture_creates_job_without_accepted_message_by_default(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(post_payload={"job_id": "cap-1"})
     update, context = make_update_context(
@@ -1122,19 +1222,19 @@ def test_wiki_capture_creates_capture_job_with_telegram_source(make_update_conte
     asyncio.run(bot.wiki_command(update, context))
 
     assert client.calls[0]["json"]["command"] == "capture"
-    assert client.calls[0]["json"]["payload"] == {"text": "quick note", "source": "telegram"}
-    assert update.message.replies[-1] == (
-        "위키 capture 작업을 접수했어요.\n"
-        "job_id=cap-1\n\n"
-        "저장 완료 후 이 채팅방으로 알려드릴게요.\n"
-        "검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
-    )
+    assert client.calls[0]["json"]["payload"] == {
+        "text": "quick note",
+        "source": "telegram",
+    }
+    assert update.message.replies == []
 
 
 def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch, caplog):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "999")
     client = FakeObsidianClient()
-    update, context = make_update_context(user_id=123, text="/wiki ingest", client=client, args=["ingest"])
+    update, context = make_update_context(
+        user_id=123, text="/wiki ingest", client=client, args=["ingest"]
+    )
 
     with caplog.at_level("WARNING"):
         asyncio.run(bot.wiki_command(update, context))
@@ -1149,7 +1249,9 @@ def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch, capl
 
 def test_wiki_missing_subcommand_shows_help(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
-    update, context = make_update_context(text="/wiki", client=FakeObsidianClient(), args=[])
+    update, context = make_update_context(
+        text="/wiki", client=FakeObsidianClient(), args=[]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
@@ -1158,7 +1260,9 @@ def test_wiki_missing_subcommand_shows_help(make_update_context, monkeypatch):
 
 def test_wiki_ask_requires_question(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
-    update, context = make_update_context(text="/wiki ask", client=FakeObsidianClient(), args=["ask"])
+    update, context = make_update_context(
+        text="/wiki ask", client=FakeObsidianClient(), args=["ask"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
@@ -1167,7 +1271,9 @@ def test_wiki_ask_requires_question(make_update_context, monkeypatch):
 
 def test_wiki_capture_requires_text(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
-    update, context = make_update_context(text="/wiki capture", client=FakeObsidianClient(), args=["capture"])
+    update, context = make_update_context(
+        text="/wiki capture", client=FakeObsidianClient(), args=["capture"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
@@ -1177,27 +1283,76 @@ def test_wiki_capture_requires_text(make_update_context, monkeypatch):
 def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(post_payload={"id": 55})
-    update, context = make_update_context(text="/wiki ingest", client=client, args=["ingest"])
+    update, context = make_update_context(
+        text="/wiki ingest", client=client, args=["ingest"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
     assert client.calls[0]["json"]["command"] == "ingest"
     assert client.calls[0]["json"]["payload"] == {}
-    assert update.message.replies[-1] == "위키 ingest 작업을 접수했어요.\njob_id=55\n\n완료되면 이 채팅방으로 결과를 보내드릴게요.\n수동 확인: /wiki result 55"
+    assert update.message.replies == []
+
+
+def test_wiki_draft_creates_job_without_accepted_message_by_default(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "draft-1"})
+    update, context = make_update_context(
+        text="/wiki draft trip plan",
+        client=client,
+        args=["draft", "trip", "plan"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"]["command"] == "draft"
+    assert client.calls[0]["json"]["payload"] == {"topic": "trip plan"}
+    assert update.message.replies == []
+
+
+def test_wiki_send_accepted_message_env_restores_old_behavior(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE", "true")
+    client = FakeObsidianClient(post_payload={"job_id": "cap-accepted"})
+    update, context = make_update_context(
+        text="/wiki capture quick note",
+        client=client,
+        args=["capture", "quick", "note"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == (
+        "위키 capture 작업을 접수했어요.\n"
+        "job_id=cap-accepted\n\n"
+        "저장 완료 후 이 채팅방으로 알려드릴게요.\n"
+        "검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
+    )
 
 
 def test_wiki_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     request = httpx.Request("POST", "http://test/obsidian/jobs")
     client = FakeObsidianClient(post_error=httpx.RequestError("down", request=request))
-    update, context = make_update_context(text="/wiki ingest", client=client, args=["ingest"])
+    update, context = make_update_context(
+        text="/wiki ingest", client=client, args=["ingest"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == "위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요."
+    assert (
+        update.message.replies[-1]
+        == "위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요."
+    )
 
 
-def test_wiki_status_calls_gateway_with_auth_and_renders_queue_counts(make_update_context, monkeypatch):
+def test_wiki_status_calls_gateway_with_auth_and_renders_queue_counts(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "status-token")
     client = FakeObsidianClient(
@@ -1217,7 +1372,9 @@ def test_wiki_status_calls_gateway_with_auth_and_renders_queue_counts(make_updat
             },
         }
     )
-    update, context = make_update_context(text="/wiki status", client=client, args=["status"])
+    update, context = make_update_context(
+        text="/wiki status", client=client, args=["status"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
@@ -1241,7 +1398,9 @@ def test_wiki_status_calls_gateway_with_auth_and_renders_queue_counts(make_updat
     assert "last_finished_job: job_id=job-done, command=ask, status=succeeded" in reply
 
 
-def test_wiki_status_with_job_id_fetches_job_and_replies_with_answer(make_update_context, monkeypatch):
+def test_wiki_status_with_job_id_fetches_job_and_replies_with_answer(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "detail-token")
     client = FakeObsidianClient(
@@ -1273,10 +1432,14 @@ def test_wiki_status_with_job_id_fetches_job_and_replies_with_answer(make_update
             },
         }
     ]
-    assert update.message.replies[-1] == "여행지는 제주였어요.\n\n참고:\n- Trips/Jeju.md"
+    assert (
+        update.message.replies[-1] == "여행지는 제주였어요.\n\n참고:\n- Trips/Jeju.md"
+    )
 
 
-def test_wiki_result_with_job_id_fetches_job_and_replies_with_answer(make_update_context, monkeypatch):
+def test_wiki_result_with_job_id_fetches_job_and_replies_with_answer(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
         get_payloads={
@@ -1299,7 +1462,9 @@ def test_wiki_result_with_job_id_fetches_job_and_replies_with_answer(make_update
     assert update.message.replies[-1] == "결과 본문입니다."
 
 
-def test_wiki_result_with_job_id_sends_internal_auth_token(make_update_context, monkeypatch):
+def test_wiki_result_with_job_id_sends_internal_auth_token(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "result-token")
     client = FakeObsidianClient(
@@ -1324,7 +1489,9 @@ def test_wiki_result_with_job_id_sends_internal_auth_token(make_update_context, 
     assert client.calls[0]["headers"]["Authorization"] == "Bearer result-token"
 
 
-def test_wiki_ask_auto_result_polling_immediate_success(make_update_context, monkeypatch):
+def test_wiki_ask_auto_result_polling_immediate_success(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
 
@@ -1335,11 +1502,13 @@ def test_wiki_ask_auto_result_polling_immediate_success(make_update_context, mon
     client = FakeObsidianClient(
         post_payload={"job_id": "ask-fast"},
         get_payloads={
-            "/obsidian/jobs/ask-fast": [{
-                "job_id": "ask-fast",
-                "status": "succeeded",
-                "result_text": json.dumps({"answer": "바로 완료"}),
-            }]
+            "/obsidian/jobs/ask-fast": [
+                {
+                    "job_id": "ask-fast",
+                    "status": "succeeded",
+                    "result_text": json.dumps({"answer": "바로 완료"}),
+                }
+            ]
         },
     )
     update, context = make_update_context(
@@ -1355,22 +1524,28 @@ def test_wiki_ask_auto_result_polling_immediate_success(make_update_context, mon
     assert update.message.replies[-1] == "바로 완료"
 
 
-def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(make_update_context, monkeypatch):
+def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
 
     async def fake_send_chunked_message_as_replies(_update, _text):
         raise RuntimeError("telegram send failed")
 
-    monkeypatch.setattr(bot, "_send_chunked_message_as_replies", fake_send_chunked_message_as_replies)
+    monkeypatch.setattr(
+        bot, "_send_chunked_message_as_replies", fake_send_chunked_message_as_replies
+    )
     client = FakeObsidianClient(
         post_payload={"job_id": "ask-send-fail"},
         get_payloads={
-            "/obsidian/jobs/ask-send-fail": [{
-                "job_id": "ask-send-fail",
-                "status": "succeeded",
-                "result_text": json.dumps({"answer": "바로 완료"}),
-            }]
+            "/obsidian/jobs/ask-send-fail": [
+                {
+                    "job_id": "ask-send-fail",
+                    "status": "succeeded",
+                    "result_text": json.dumps({"answer": "바로 완료"}),
+                }
+            ]
         },
     )
     update, context = make_update_context(
@@ -1390,7 +1565,9 @@ def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(make_update_co
     assert all(not call["path"].endswith("/notified") for call in client.calls)
 
 
-def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update_context, monkeypatch):
+def test_wiki_ask_auto_result_polling_timeout_sends_no_message_by_default(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
 
@@ -1413,15 +1590,12 @@ def test_wiki_ask_auto_result_polling_timeout_shows_accepted_message(make_update
     asyncio.run(bot.wiki_command(update, context))
 
     assert [call["method"] for call in client.calls] == ["POST", "GET"]
-    assert update.message.replies[-1] == (
-        "위키 ask 작업을 접수했어요.\n"
-        "job_id=ask-slow\n\n"
-        "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
-        "수동 확인: /wiki result ask-slow"
-    )
+    assert update.message.replies == []
 
 
-def test_wiki_ask_auto_result_polling_slow_detail_falls_back_to_accepted_message(make_update_context, monkeypatch):
+def test_wiki_ask_auto_result_polling_slow_detail_sends_no_message_by_default(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
 
@@ -1440,16 +1614,12 @@ def test_wiki_ask_auto_result_polling_slow_detail_falls_back_to_accepted_message
     asyncio.run(bot.wiki_command(update, context))
 
     assert [call["method"] for call in client.calls] == ["POST", "GET"]
-    assert update.message.replies == [
-        "위키 ask 작업을 접수했어요.\n"
-        "job_id=ask-hang\n\n"
-        "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
-        "수동 확인: /wiki result ask-hang"
-    ]
-    assert all(reply.strip() for reply in update.message.replies)
+    assert update.message.replies == []
 
 
-def test_wiki_job_result_processing_status_returns_processing_message(make_update_context, monkeypatch):
+def test_wiki_job_result_processing_status_returns_processing_message(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
         get_payloads={
@@ -1467,10 +1637,15 @@ def test_wiki_job_result_processing_status_returns_processing_message(make_updat
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == "위키 작업이 아직 처리 중이에요. job_id=job-running status=running"
+    assert (
+        update.message.replies[-1]
+        == "위키 작업이 아직 처리 중이에요. job_id=job-running status=running"
+    )
 
 
-def test_wiki_job_result_failed_status_includes_error_text(make_update_context, monkeypatch):
+def test_wiki_job_result_failed_status_includes_error_text(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
         get_payloads={
@@ -1489,10 +1664,15 @@ def test_wiki_job_result_failed_status_includes_error_text(make_update_context, 
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == "위키 작업이 실패했어요. job_id=job-failed\n오류: worker timeout"
+    assert (
+        update.message.replies[-1]
+        == "위키 작업이 실패했어요. job_id=job-failed\n오류: worker timeout"
+    )
 
 
-def test_wiki_job_result_expired_status_returns_retry_message(make_update_context, monkeypatch):
+def test_wiki_job_result_expired_status_returns_retry_message(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
         get_payloads={
@@ -1513,10 +1693,15 @@ def test_wiki_job_result_expired_status_returns_retry_message(make_update_contex
     assert update.message.replies[-1] == (
         "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
     )
-    assert update.message.replies[-1] != "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+    assert (
+        update.message.replies[-1]
+        != "위키 작업은 완료됐지만 표시할 결과가 비어 있어요."
+    )
 
 
-def test_wiki_job_result_blank_result_uses_safe_fallback(make_update_context, monkeypatch):
+def test_wiki_job_result_blank_result_uses_safe_fallback(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     client = FakeObsidianClient(
         get_payloads={
@@ -1535,29 +1720,44 @@ def test_wiki_job_result_blank_result_uses_safe_fallback(make_update_context, mo
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
+    assert (
+        update.message.replies[-1]
+        == "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
+    )
 
 
-def test_wiki_status_gateway_failure_returns_friendly_error(make_update_context, monkeypatch):
+def test_wiki_status_gateway_failure_returns_friendly_error(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     request = httpx.Request("GET", "http://test/obsidian/status")
     client = FakeObsidianClient(get_error=httpx.RequestError("down", request=request))
-    update, context = make_update_context(text="/wiki status", client=client, args=["status"])
+    update, context = make_update_context(
+        text="/wiki status", client=client, args=["status"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == "위키 상태를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+    assert (
+        update.message.replies[-1]
+        == "위키 상태를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+    )
 
 
-def test_wiki_status_disallowed_user_does_not_call_gateway(make_update_context, monkeypatch):
+def test_wiki_status_disallowed_user_does_not_call_gateway(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "999")
     client = FakeObsidianClient()
-    update, context = make_update_context(user_id=123, text="/wiki status", client=client, args=["status"])
+    update, context = make_update_context(
+        user_id=123, text="/wiki status", client=client, args=["status"]
+    )
 
     asyncio.run(bot.wiki_command(update, context))
 
     assert client.calls == []
     assert update.message.replies[-1] == bot.build_wiki_denied_message(123)
+
 
 class FakeTelegramBot:
     def __init__(self, fail=False):
@@ -1612,62 +1812,76 @@ def test_obsidian_notification_poll_fetches_next_completed_job(monkeypatch):
 
     asyncio.run(bot.poll_obsidian_job_notification_once(app))
 
-    assert client.calls == [{
-        "method": "GET",
-        "path": bot.OBSIDIAN_NOTIFICATIONS_NEXT_PATH,
-        "headers": {
-            "X-Request-Id": client.calls[0]["headers"]["X-Request-Id"],
-            "Authorization": "Bearer notify-token",
-        },
-    }]
+    assert client.calls == [
+        {
+            "method": "GET",
+            "path": bot.OBSIDIAN_NOTIFICATIONS_NEXT_PATH,
+            "headers": {
+                "X-Request-Id": client.calls[0]["headers"]["X-Request-Id"],
+                "Authorization": "Bearer notify-token",
+            },
+        }
+    ]
 
 
-def test_obsidian_notification_succeeded_job_sends_rendered_answer_and_marks_notified(monkeypatch):
+def test_obsidian_notification_succeeded_job_sends_rendered_answer_and_marks_notified(
+    monkeypatch,
+):
     monkeypatch.setenv("OBSIDIAN_TELEGRAM_INTERNAL_TOKEN", "notify-token")
-    client = FakeObsidianClient(get_payload={
-        "job_id": "job-100",
-        "status": "succeeded",
-        "telegram_chat_id": 777,
-        "result_text": json.dumps({"answer": "완료 답변", "references": ["A.md"]}),
-    })
+    client = FakeObsidianClient(
+        get_payload={
+            "job_id": "job-100",
+            "status": "succeeded",
+            "telegram_chat_id": 777,
+            "result_text": json.dumps({"answer": "완료 답변", "references": ["A.md"]}),
+        }
+    )
     telegram_bot = FakeTelegramBot()
     app = make_fake_app(client, telegram_bot)
 
     delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
 
     assert delivered is True
-    assert telegram_bot.sent_messages == [{"chat_id": 777, "text": "완료 답변\n\n참고:\n- A.md"}]
+    assert telegram_bot.sent_messages == [
+        {"chat_id": 777, "text": "완료 답변\n\n참고:\n- A.md"}
+    ]
     assert client.calls[-1]["method"] == "POST"
     assert client.calls[-1]["path"] == "/obsidian/jobs/job-100/notified"
 
 
 def test_obsidian_notification_failed_job_sends_error_and_marks_notified():
-    client = FakeObsidianClient(get_payload={
-        "job_id": "job-fail",
-        "status": "failed",
-        "telegram_chat_id": 888,
-        "error_text": "worker timeout",
-    })
+    client = FakeObsidianClient(
+        get_payload={
+            "job_id": "job-fail",
+            "status": "failed",
+            "telegram_chat_id": 888,
+            "error_text": "worker timeout",
+        }
+    )
     telegram_bot = FakeTelegramBot()
     app = make_fake_app(client, telegram_bot)
 
     delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
 
     assert delivered is True
-    assert telegram_bot.sent_messages == [{
-        "chat_id": 888,
-        "text": "위키 작업이 실패했어요. job_id=job-fail\n오류: worker timeout",
-    }]
+    assert telegram_bot.sent_messages == [
+        {
+            "chat_id": 888,
+            "text": "위키 작업이 실패했어요. job_id=job-fail\n오류: worker timeout",
+        }
+    ]
     assert client.calls[-1]["path"] == "/obsidian/jobs/job-fail/notified"
 
 
 def test_obsidian_notification_send_failure_does_not_mark_notified(caplog):
-    client = FakeObsidianClient(get_payload={
-        "job_id": "job-send-fail",
-        "status": "succeeded",
-        "telegram_chat_id": 999,
-        "result_text": "hello",
-    })
+    client = FakeObsidianClient(
+        get_payload={
+            "job_id": "job-send-fail",
+            "status": "succeeded",
+            "telegram_chat_id": 999,
+            "result_text": "hello",
+        }
+    )
     app = make_fake_app(client, FakeTelegramBot(fail=True))
 
     with caplog.at_level("WARNING"):
@@ -1691,5 +1905,11 @@ def test_obsidian_notification_empty_response_sends_nothing():
 
 
 def test_wiki_accepted_messages_mention_automatic_delivery():
-    assert "완료되면 이 채팅방으로 결과를 보내드릴게요." in bot.build_wiki_accepted_message("ask", "a1")
-    assert "저장 완료 후 이 채팅방으로 알려드릴게요." in bot.build_wiki_accepted_message("capture", "c1")
+    assert (
+        "완료되면 이 채팅방으로 결과를 보내드릴게요."
+        in bot.build_wiki_accepted_message("ask", "a1")
+    )
+    assert (
+        "저장 완료 후 이 채팅방으로 알려드릴게요."
+        in bot.build_wiki_accepted_message("capture", "c1")
+    )

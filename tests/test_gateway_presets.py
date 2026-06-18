@@ -56,12 +56,14 @@ def test_static_fallback_presets_match_gateway_field_shape(
     preset_name, preset_definition
 ):
     assert set(preset_definition) == GATEWAY_PRESET_FIELDS
-    assert preset_definition["description"] == bot.STATIC_PRESET_DEFINITIONS[preset_name][
-        "description"
-    ]
-    assert preset_definition["prompt_prefix"] == bot.STATIC_PRESET_DEFINITIONS[preset_name][
-        "prompt_prefix"
-    ]
+    assert (
+        preset_definition["description"]
+        == bot.STATIC_PRESET_DEFINITIONS[preset_name]["description"]
+    )
+    assert (
+        preset_definition["prompt_prefix"]
+        == bot.STATIC_PRESET_DEFINITIONS[preset_name]["prompt_prefix"]
+    )
 
 
 def test_default_preset_is_present_in_static_fallback_presets():
@@ -70,7 +72,9 @@ def test_default_preset_is_present_in_static_fallback_presets():
     assert bot.DEFAULT_PRESET in fallback_presets
     assert fallback_presets[bot.DEFAULT_PRESET] == {
         "description": bot.STATIC_PRESET_DEFINITIONS[bot.DEFAULT_PRESET]["description"],
-        "prompt_prefix": bot.STATIC_PRESET_DEFINITIONS[bot.DEFAULT_PRESET]["prompt_prefix"],
+        "prompt_prefix": bot.STATIC_PRESET_DEFINITIONS[bot.DEFAULT_PRESET][
+            "prompt_prefix"
+        ],
     }
 
 

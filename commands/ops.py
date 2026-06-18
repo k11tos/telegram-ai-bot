@@ -8,7 +8,6 @@ from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
 
-
 @dataclass(frozen=True)
 class OperationalCommandDependencies:
     load_gateway_presets: Callable[[object], Awaitable[dict[str, bool]]]
@@ -26,7 +25,9 @@ class OperationalCommandDependencies:
 _ops_dependencies: OperationalCommandDependencies | None = None
 
 
-def configure_operational_dependencies(dependencies: OperationalCommandDependencies) -> None:
+def configure_operational_dependencies(
+    dependencies: OperationalCommandDependencies,
+) -> None:
     global _ops_dependencies
     _ops_dependencies = dependencies
 
@@ -48,7 +49,9 @@ async def reload_presets_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"프리셋을 다시 불러왔습니다: {preset_names}")
         return
 
-    await update.message.reply_text("게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다.")
+    await update.message.reply_text(
+        "게이트웨이 프리셋을 불러오지 못해 기본 프리셋으로 유지합니다."
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,7 +90,9 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"health_check_client_missing request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms}"
         )
-        await update.message.reply_text("게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요.")
+        await update.message.reply_text(
+            "게이트웨이에 연결할 수 없어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     try:
@@ -102,7 +107,9 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"health_check_failed request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
         )
-        await update.message.reply_text("게이트웨이 상태가 불안정하거나 사용할 수 없어요.")
+        await update.message.reply_text(
+            "게이트웨이 상태가 불안정하거나 사용할 수 없어요."
+        )
         return
 
     latency_ms = int((time.monotonic() - request_start_ts) * 1000)
@@ -131,7 +138,9 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"models_http_client_missing request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms}"
         )
-        await update.message.reply_text("죄송해요. 지금은 모델 목록을 가져올 수 없어요.")
+        await update.message.reply_text(
+            "죄송해요. 지금은 모델 목록을 가져올 수 없어요."
+        )
         return
 
     try:
@@ -147,7 +156,9 @@ async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"models_request_failed request_id={request_id} user_id={user_id} "
             f"chat_id={chat_id} latency_ms={latency_ms} error={error}"
         )
-        await update.message.reply_text("죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        await update.message.reply_text(
+            "죄송해요. 모델 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     if not model_names:
