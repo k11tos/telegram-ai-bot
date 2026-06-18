@@ -9,7 +9,9 @@ class DocumentValidationError(Exception):
         self.message = message
 
 
-def is_supported_document(file_name: str | None, supported_extensions: tuple[str, ...]) -> bool:
+def is_supported_document(
+    file_name: str | None, supported_extensions: tuple[str, ...]
+) -> bool:
     if not isinstance(file_name, str):
         return False
     lowered = file_name.lower()
@@ -47,7 +49,9 @@ def normalize_document_summary_mode(mode: str | None) -> str:
     return DEFAULT_DOCUMENT_SUMMARY_MODE
 
 
-def build_document_summary_prompt(file_name: str, content: str, mode: str | None = None) -> str:
+def build_document_summary_prompt(
+    file_name: str, content: str, mode: str | None = None
+) -> str:
     normalized_mode = normalize_document_summary_mode(mode)
     instructions = DOCUMENT_SUMMARY_MODE_INSTRUCTIONS[normalized_mode]
     requirements = "\n".join(instructions)

@@ -67,10 +67,14 @@ class FakeClient:
         self.post_calls = []
 
     def stream(self, method, path, json=None, headers=None):
-        self.stream_calls.append({"method": method, "path": path, "json": json, "headers": headers})
+        self.stream_calls.append(
+            {"method": method, "path": path, "json": json, "headers": headers}
+        )
         if self.stream_error is not None:
             raise self.stream_error
-        return FakeStreamResponse(self.stream_lines, status_error=self.stream_status_error)
+        return FakeStreamResponse(
+            self.stream_lines, status_error=self.stream_status_error
+        )
 
     async def post(self, path, json=None, headers=None):
         self.post_calls.append({"path": path, "json": json, "headers": headers})
@@ -112,8 +116,12 @@ class DelayedClient(FakeClient):
         self._gate = gate
 
     def stream(self, method, path, json=None, headers=None):
-        self.stream_calls.append({"method": method, "path": path, "json": json, "headers": headers})
-        return DelayedStreamResponse(self._gate, self.stream_lines, status_error=self.stream_status_error)
+        self.stream_calls.append(
+            {"method": method, "path": path, "json": json, "headers": headers}
+        )
+        return DelayedStreamResponse(
+            self._gate, self.stream_lines, status_error=self.stream_status_error
+        )
 
 
 def test_first_message_initializes_history_and_calls_gateway(make_update_context):
@@ -139,10 +147,12 @@ def test_first_message_initializes_history_and_calls_gateway(make_update_context
     assert client.post_calls == []
 
 
-
-
-def test_long_response_is_delivered_in_chunks_via_edit_then_replies(make_update_context):
-    long_response = (("첫 문단입니다. " * 200) + "\n\n" + ("둘째 문단입니다. " * 220)).strip()
+def test_long_response_is_delivered_in_chunks_via_edit_then_replies(
+    make_update_context,
+):
+    long_response = (
+        ("첫 문단입니다. " * 200) + "\n\n" + ("둘째 문단입니다. " * 220)
+    ).strip()
     expected_chunks = bot.split_telegram_text(long_response)
     assert len(expected_chunks) > 1
 
@@ -160,8 +170,11 @@ def test_long_response_is_delivered_in_chunks_via_edit_then_replies(make_update_
     assert update.message.waiting_message.edits[-1] == expected_chunks[0]
     assert update.message.replies[1:] == expected_chunks[1:]
 
-    delivered = update.message.waiting_message.edits[-1] + "".join(update.message.replies[1:])
+    delivered = update.message.waiting_message.edits[-1] + "".join(
+        update.message.replies[1:]
+    )
     assert delivered == long_response
+
 
 def test_existing_conversation_trims_and_preserves_latest_history(make_update_context):
     user_id = 77
@@ -174,7 +187,9 @@ def test_existing_conversation_trims_and_preserves_latest_history(make_update_co
             "data: [DONE]",
         ]
     )
-    update, context = make_update_context(user_id=user_id, text="새 질문", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="새 질문", client=client
+    )
 
     asyncio.run(bot.handle_message(update, context))
 
@@ -184,7 +199,9 @@ def test_existing_conversation_trims_and_preserves_latest_history(make_update_co
         "preset": "normal",
     }
 
-    expected_saved = (old_history + ["User: 새 질문", "AI: 새 답변"])[-bot.MAX_HISTORY :]
+    expected_saved = (old_history + ["User: 새 질문", "AI: 새 답변"])[
+        -bot.MAX_HISTORY :
+    ]
     assert bot.get_session_history(user_id) == expected_saved
 
 
@@ -205,7 +222,9 @@ def test_stream_failure_falls_back_to_chat_and_appends_reply(make_update_context
     assert update.message.waiting_message.edits[-1] == "폴백 응답"
 
 
-def test_stream_done_without_text_and_empty_fallback_returns_blank_message_without_history(make_update_context):
+def test_stream_done_without_text_and_empty_fallback_returns_blank_message_without_history(
+    make_update_context,
+):
     client = FakeClient(
         stream_lines=["data: [DONE]"],
         post_payload={"response": ""},
@@ -221,7 +240,9 @@ def test_stream_done_without_text_and_empty_fallback_returns_blank_message_witho
     assert bot.get_session_history(123) == []
 
 
-def test_fallback_whitespace_response_returns_blank_message_without_empty_telegram_calls(make_update_context):
+def test_fallback_whitespace_response_returns_blank_message_without_empty_telegram_calls(
+    make_update_context,
+):
     request = httpx.Request("POST", "http://test/chat")
     stream_error = httpx.RequestError("stream failed", request=request)
     client = FakeClient(
@@ -238,7 +259,9 @@ def test_fallback_whitespace_response_returns_blank_message_without_empty_telegr
     assert bot.get_session_history(123) == []
 
 
-def test_blank_response_turn_advances_finalize_queue_and_next_message_recovers(make_update_context):
+def test_blank_response_turn_advances_finalize_queue_and_next_message_recovers(
+    make_update_context,
+):
     async def scenario():
         user_id = 616
         blank_client = FakeClient(
@@ -253,7 +276,10 @@ def test_blank_response_turn_advances_finalize_queue_and_next_message_recovers(m
 
         await bot.handle_message(blank_update, blank_context)
 
-        assert blank_update.message.waiting_message.edits[-1] == bot.BLANK_AI_RESPONSE_MESSAGE
+        assert (
+            blank_update.message.waiting_message.edits[-1]
+            == bot.BLANK_AI_RESPONSE_MESSAGE
+        )
         assert bot.get_session_history(user_id) == []
         assert bot.user_next_turn_to_finalize[user_id] == 2
 
@@ -269,7 +295,9 @@ def test_blank_response_turn_advances_finalize_queue_and_next_message_recovers(m
             client=success_client,
         )
 
-        await asyncio.wait_for(bot.handle_message(success_update, success_context), timeout=1)
+        await asyncio.wait_for(
+            bot.handle_message(success_update, success_context), timeout=1
+        )
 
         assert success_update.message.waiting_message.edits[-1] == "정상 응답"
         assert bot.user_in_flight_requests[user_id] is False
@@ -279,11 +307,16 @@ def test_blank_response_turn_advances_finalize_queue_and_next_message_recovers(m
     asyncio.run(scenario())
 
 
-def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(make_update_context):
+def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(
+    make_update_context,
+):
     async def scenario():
         user_id = 452
         first_client = FakeClient(
-            stream_lines=[f"data: {json.dumps({'response': '첫 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': '첫 응답'})}",
+                "data: [DONE]",
+            ],
         )
         failed_update, failed_context = make_update_context(
             user_id=user_id,
@@ -310,7 +343,10 @@ def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(make_
         assert bot.user_next_turn_to_finalize[user_id] == 2
 
         next_client = FakeClient(
-            stream_lines=[f"data: {json.dumps({'response': '복구 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': '복구 응답'})}",
+                "data: [DONE]",
+            ],
         )
         next_update, next_context = make_update_context(
             user_id=user_id,
@@ -328,13 +364,18 @@ def test_waiting_message_creation_failure_cleans_up_and_next_turn_recovers(make_
     asyncio.run(scenario())
 
 
-def test_inflight_request_is_rejected_while_first_request_is_running(make_update_context):
+def test_inflight_request_is_rejected_while_first_request_is_running(
+    make_update_context,
+):
     async def scenario():
         user_id = 451
         gate = asyncio.Event()
         first_client = DelayedClient(
             gate=gate,
-            stream_lines=[f"data: {json.dumps({'response': '첫 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': '첫 응답'})}",
+                "data: [DONE]",
+            ],
         )
         first_update, first_context = make_update_context(
             user_id=user_id,
@@ -342,7 +383,9 @@ def test_inflight_request_is_rejected_while_first_request_is_running(make_update
             client=first_client,
         )
 
-        first_task = asyncio.create_task(bot.handle_message(first_update, first_context))
+        first_task = asyncio.create_task(
+            bot.handle_message(first_update, first_context)
+        )
 
         while not first_client.stream_calls:
             await asyncio.sleep(0)
@@ -350,11 +393,18 @@ def test_inflight_request_is_rejected_while_first_request_is_running(make_update
         second_update, second_context = make_update_context(
             user_id=user_id,
             text="두번째 요청",
-            client=FakeClient(stream_lines=[f"data: {json.dumps({'response': '둘 응답'})}", "data: [DONE]"]),
+            client=FakeClient(
+                stream_lines=[
+                    f"data: {json.dumps({'response': '둘 응답'})}",
+                    "data: [DONE]",
+                ]
+            ),
         )
         await bot.handle_message(second_update, second_context)
 
-        assert second_update.message.replies == ["이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."]
+        assert second_update.message.replies == [
+            "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."
+        ]
 
         gate.set()
         await first_task
@@ -407,11 +457,16 @@ def test_backend_request_error_is_handled_gracefully(make_update_context):
     asyncio.run(bot.handle_message(update, context))
 
     assert bot.get_session_history(123) == []
-    assert update.message.waiting_message.edits[-1] == "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+    assert (
+        update.message.waiting_message.edits[-1]
+        == "죄송합니다. AI 서버와의 연결에 실패했습니다. 잠시 후 다시 시도해주세요."
+    )
     assert bot.user_in_flight_requests[123] is False
 
 
-def test_request_preparation_failure_does_not_leak_inflight_flag(make_update_context, monkeypatch):
+def test_request_preparation_failure_does_not_leak_inflight_flag(
+    make_update_context, monkeypatch
+):
     client = FakeClient(
         stream_lines=[
             f"data: {json.dumps({'response': '정상 응답'})}",
@@ -435,7 +490,10 @@ def test_request_preparation_failure_does_not_leak_inflight_flag(make_update_con
     asyncio.run(bot.handle_message(next_update, next_context))
 
     assert next_update.message.replies[0] == "생각 중…"
-    assert "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요." not in next_update.message.replies
+    assert (
+        "이전 요청을 처리 중입니다. 잠시 후 다시 보내주세요."
+        not in next_update.message.replies
+    )
     assert bot.user_in_flight_requests[123] is False
 
 
@@ -460,17 +518,27 @@ def test_prompt_history_boundaries_keep_expected_recent_lines(
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="경계 질문", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="경계 질문", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     expected_prompt_lines = (base_history + ["User: 경계 질문"])[-bot.MAX_HISTORY :]
     assert expected_prompt_lines[0] == f"H{expected_oldest_index}"
-    assert client.stream_calls[0]["json"]["prompt"] == "\n".join(expected_prompt_lines) + "\nAI:"
+    assert (
+        client.stream_calls[0]["json"]["prompt"]
+        == "\n".join(expected_prompt_lines) + "\nAI:"
+    )
 
 
 def test_prompt_includes_exact_history_order_and_role_prefixes(make_update_context):
     user_id = 1001
-    bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = ["User: 첫 질문", "AI: 첫 답변", "User: 둘째 질문", "AI: 둘째 답변"]
+    bot.ensure_user_sessions(user_id)[bot.DEFAULT_SESSION_NAME] = [
+        "User: 첫 질문",
+        "AI: 첫 답변",
+        "User: 둘째 질문",
+        "AI: 둘째 답변",
+    ]
     client = FakeClient(
         stream_lines=[
             f"data: {json.dumps({'response': '셋째 답변'})}",
@@ -478,7 +546,9 @@ def test_prompt_includes_exact_history_order_and_role_prefixes(make_update_conte
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="셋째 질문", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="셋째 질문", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {
@@ -490,11 +560,19 @@ def test_prompt_includes_exact_history_order_and_role_prefixes(make_update_conte
 def test_multi_user_history_is_isolated(make_update_context):
     user_a = 11
     user_b = 22
-    client_a = FakeClient(stream_lines=[f"data: {json.dumps({'response': 'A응답'})}", "data: [DONE]"])
-    client_b = FakeClient(stream_lines=[f"data: {json.dumps({'response': 'B응답'})}", "data: [DONE]"])
+    client_a = FakeClient(
+        stream_lines=[f"data: {json.dumps({'response': 'A응답'})}", "data: [DONE]"]
+    )
+    client_b = FakeClient(
+        stream_lines=[f"data: {json.dumps({'response': 'B응답'})}", "data: [DONE]"]
+    )
 
-    update_a, context_a = make_update_context(user_id=user_a, text="A질문", client=client_a)
-    update_b, context_b = make_update_context(user_id=user_b, text="B질문", client=client_b)
+    update_a, context_a = make_update_context(
+        user_id=user_a, text="A질문", client=client_a
+    )
+    update_b, context_b = make_update_context(
+        user_id=user_b, text="B질문", client=client_b
+    )
 
     asyncio.run(bot.handle_message(update_a, context_a))
     asyncio.run(bot.handle_message(update_b, context_b))
@@ -510,14 +588,22 @@ def test_reset_clears_prior_conversation_for_next_prompt(make_update_context):
     initial_client = FakeClient(
         stream_lines=[f"data: {json.dumps({'response': '이전 응답'})}", "data: [DONE]"]
     )
-    first_update, first_context = make_update_context(user_id=user_id, text="이전 질문", client=initial_client)
+    first_update, first_context = make_update_context(
+        user_id=user_id, text="이전 질문", client=initial_client
+    )
     asyncio.run(bot.handle_message(first_update, first_context))
 
-    reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+    reset_update, reset_context = make_update_context(
+        user_id=user_id, text="/reset", client=None
+    )
     asyncio.run(bot.reset(reset_update, reset_context))
 
-    next_client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '새 응답'})}", "data: [DONE]"])
-    next_update, next_context = make_update_context(user_id=user_id, text="새 질문", client=next_client)
+    next_client = FakeClient(
+        stream_lines=[f"data: {json.dumps({'response': '새 응답'})}", "data: [DONE]"]
+    )
+    next_update, next_context = make_update_context(
+        user_id=user_id, text="새 질문", client=next_client
+    )
     asyncio.run(bot.handle_message(next_update, next_context))
 
     assert next_client.stream_calls[0]["json"]["prompt"] == "User: 새 질문\nAI:"
@@ -527,14 +613,27 @@ def test_reset_clears_prior_conversation_for_next_prompt(make_update_context):
 @pytest.mark.parametrize(
     ("post_kwargs", "expected_message"),
     [
-        ({"post_error": httpx.ReadTimeout("read timeout")}, "응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요."),
-        ({"post_json_error": ValueError("bad json")}, "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."),
-        ({"post_payload": {}}, "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다."),
+        (
+            {"post_error": httpx.ReadTimeout("read timeout")},
+            "응답이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.",
+        ),
+        (
+            {"post_json_error": ValueError("bad json")},
+            "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.",
+        ),
+        (
+            {"post_payload": {}},
+            "죄송합니다. AI 응답을 처리하는 중 오류가 발생했습니다.",
+        ),
     ],
 )
-def test_fallback_resilience_errors_are_user_friendly(make_update_context, post_kwargs, expected_message):
+def test_fallback_resilience_errors_are_user_friendly(
+    make_update_context, post_kwargs, expected_message
+):
     request = httpx.Request("POST", "http://test/gateway")
-    client = FakeClient(stream_error=httpx.RequestError("stream failed", request=request), **post_kwargs)
+    client = FakeClient(
+        stream_error=httpx.RequestError("stream failed", request=request), **post_kwargs
+    )
     update, context = make_update_context(text="복원력 테스트", client=client)
 
     asyncio.run(bot.handle_message(update, context))
@@ -548,18 +647,28 @@ def test_non_200_fallback_response_is_handled(make_update_context):
     response = httpx.Response(503, request=request)
     client = FakeClient(
         stream_error=httpx.RequestError("stream failed", request=request),
-        post_status_error=httpx.HTTPStatusError("service unavailable", request=request, response=response),
+        post_status_error=httpx.HTTPStatusError(
+            "service unavailable", request=request, response=response
+        ),
     )
     update, context = make_update_context(text="상태 코드 테스트", client=client)
 
     asyncio.run(bot.handle_message(update, context))
 
-    assert update.message.waiting_message.edits[-1] == "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+    assert (
+        update.message.waiting_message.edits[-1]
+        == "죄송합니다. AI 서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+    )
     assert bot.get_session_history(123) == []
 
 
 def test_empty_user_input_still_constructs_deterministic_prompt(make_update_context):
-    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '빈 입력 응답'})}", "data: [DONE]"])
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '빈 입력 응답'})}",
+            "data: [DONE]",
+        ]
+    )
     update, context = make_update_context(text="", client=client)
 
     asyncio.run(bot.handle_message(update, context))
@@ -577,9 +686,14 @@ def test_reset_in_other_session_does_not_block_inflight_save(make_update_context
         gate = asyncio.Event()
         client = DelayedClient(
             gate=gate,
-            stream_lines=[f"data: {json.dumps({'response': 'A 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': 'A 응답'})}",
+                "data: [DONE]",
+            ],
         )
-        update, context = make_update_context(user_id=user_id, text="A 질문", client=client)
+        update, context = make_update_context(
+            user_id=user_id, text="A 질문", client=client
+        )
 
         task = asyncio.create_task(bot.handle_message(update, context))
 
@@ -594,13 +708,18 @@ def test_reset_in_other_session_does_not_block_inflight_save(make_update_context
         )
         await bot.session_command(switch_update, switch_context)
 
-        reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+        reset_update, reset_context = make_update_context(
+            user_id=user_id, text="/reset", client=None
+        )
         await bot.reset(reset_update, reset_context)
 
         gate.set()
         await task
 
-        assert bot.get_session_history(user_id, "default") == ["User: A 질문", "AI: A 응답"]
+        assert bot.get_session_history(user_id, "default") == [
+            "User: A 질문",
+            "AI: A 응답",
+        ]
         assert bot.get_session_history(user_id, "work") == []
 
     asyncio.run(scenario())
@@ -612,16 +731,23 @@ def test_reset_in_same_session_blocks_inflight_save(make_update_context):
         gate = asyncio.Event()
         client = DelayedClient(
             gate=gate,
-            stream_lines=[f"data: {json.dumps({'response': '지연 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': '지연 응답'})}",
+                "data: [DONE]",
+            ],
         )
-        update, context = make_update_context(user_id=user_id, text="같은 세션 질문", client=client)
+        update, context = make_update_context(
+            user_id=user_id, text="같은 세션 질문", client=client
+        )
 
         task = asyncio.create_task(bot.handle_message(update, context))
 
         while not client.stream_calls:
             await asyncio.sleep(0)
 
-        reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+        reset_update, reset_context = make_update_context(
+            user_id=user_id, text="/reset", client=None
+        )
         await bot.reset(reset_update, reset_context)
 
         gate.set()
@@ -632,7 +758,9 @@ def test_reset_in_same_session_blocks_inflight_save(make_update_context):
     asyncio.run(scenario())
 
 
-def test_telegram_delivery_fallback_replies_when_waiting_edit_fails(make_update_context):
+def test_telegram_delivery_fallback_replies_when_waiting_edit_fails(
+    make_update_context,
+):
     client = FakeClient(
         stream_lines=[
             f"data: {json.dumps({'response': '전달 폴백 응답'})}",
@@ -649,7 +777,9 @@ def test_telegram_delivery_fallback_replies_when_waiting_edit_fails(make_update_
     assert bot.get_session_history(123) == ["User: 텔레그램 전달", "AI: 전달 폴백 응답"]
 
 
-def test_finalization_waits_for_turn_order_before_appending_history(make_update_context):
+def test_finalization_waits_for_turn_order_before_appending_history(
+    make_update_context,
+):
     async def scenario():
         user_id = 777
         bot.user_next_turn_to_finalize[user_id] = 1
@@ -660,7 +790,9 @@ def test_finalization_waits_for_turn_order_before_appending_history(make_update_
                 turn_id=2,
                 response_delivered=True,
                 active_session=bot.DEFAULT_SESSION_NAME,
-                reset_token=bot.get_session_reset_token(user_id, bot.DEFAULT_SESSION_NAME),
+                reset_token=bot.get_session_reset_token(
+                    user_id, bot.DEFAULT_SESSION_NAME
+                ),
                 user_text="두번째 질문",
                 result="두번째 답변",
                 request_id="turn2",
@@ -698,21 +830,30 @@ def test_finalization_waits_for_turn_order_before_appending_history(make_update_
     asyncio.run(scenario())
 
 
-def test_reset_token_skip_keeps_response_visible_but_skips_history_write(make_update_context):
+def test_reset_token_skip_keeps_response_visible_but_skips_history_write(
+    make_update_context,
+):
     async def scenario():
         user_id = 778
         gate = asyncio.Event()
         client = DelayedClient(
             gate=gate,
-            stream_lines=[f"data: {json.dumps({'response': '리셋 이후 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': '리셋 이후 응답'})}",
+                "data: [DONE]",
+            ],
         )
-        update, context = make_update_context(user_id=user_id, text="리셋 경쟁", client=client)
+        update, context = make_update_context(
+            user_id=user_id, text="리셋 경쟁", client=client
+        )
 
         task = asyncio.create_task(bot.handle_message(update, context))
         while not client.stream_calls:
             await asyncio.sleep(0)
 
-        reset_update, reset_context = make_update_context(user_id=user_id, text="/reset", client=None)
+        reset_update, reset_context = make_update_context(
+            user_id=user_id, text="/reset", client=None
+        )
         await bot.reset(reset_update, reset_context)
 
         gate.set()
@@ -724,15 +865,22 @@ def test_reset_token_skip_keeps_response_visible_but_skips_history_write(make_up
     asyncio.run(scenario())
 
 
-def test_session_switch_without_reset_keeps_original_target_session(make_update_context):
+def test_session_switch_without_reset_keeps_original_target_session(
+    make_update_context,
+):
     async def scenario():
         user_id = 702
         gate = asyncio.Event()
         client = DelayedClient(
             gate=gate,
-            stream_lines=[f"data: {json.dumps({'response': '원래 세션 응답'})}", "data: [DONE]"],
+            stream_lines=[
+                f"data: {json.dumps({'response': '원래 세션 응답'})}",
+                "data: [DONE]",
+            ],
         )
-        update, context = make_update_context(user_id=user_id, text="세션 고정 질문", client=client)
+        update, context = make_update_context(
+            user_id=user_id, text="세션 고정 질문", client=client
+        )
 
         task = asyncio.create_task(bot.handle_message(update, context))
 
@@ -765,15 +913,23 @@ def test_session_switch_uses_separate_history(make_update_context):
     bot.user_active_sessions[user_id] = "work"
     bot.ensure_user_sessions(user_id)["work"] = ["User: w1", "AI: w2"]
 
-    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': 'w3'})}", "data: [DONE]"])
+    client = FakeClient(
+        stream_lines=[f"data: {json.dumps({'response': 'w3'})}", "data: [DONE]"]
+    )
     update, context = make_update_context(user_id=user_id, text="질문", client=client)
 
     asyncio.run(bot.handle_message(update, context))
 
-    assert client.stream_calls[0]["json"]["prompt"] == "User: w1\nAI: w2\nUser: 질문\nAI:"
-    assert bot.get_session_history(user_id, "work") == ["User: w1", "AI: w2", "User: 질문", "AI: w3"]
+    assert (
+        client.stream_calls[0]["json"]["prompt"] == "User: w1\nAI: w2\nUser: 질문\nAI:"
+    )
+    assert bot.get_session_history(user_id, "work") == [
+        "User: w1",
+        "AI: w2",
+        "User: 질문",
+        "AI: w3",
+    ]
     assert bot.get_session_history(user_id, "default") == ["User: d1", "AI: d2"]
-
 
 
 def test_selected_model_is_included_in_gateway_payloads(make_update_context):
@@ -784,7 +940,9 @@ def test_selected_model_is_included_in_gateway_payloads(make_update_context):
         stream_error=httpx.RequestError("stream failed", request=request),
         post_payload={"response": "모델 응답"},
     )
-    update, context = make_update_context(user_id=user_id, text="모델 질문", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="모델 질문", client=client
+    )
 
     asyncio.run(bot.handle_message(update, context))
 
@@ -797,11 +955,20 @@ def test_selected_model_is_included_in_gateway_payloads(make_update_context):
     assert client.post_calls[0]["json"] == expected_payload
 
 
-def test_empty_selected_model_falls_back_to_default_gateway_behavior(make_update_context):
+def test_empty_selected_model_falls_back_to_default_gateway_behavior(
+    make_update_context,
+):
     user_id = 223
     bot.user_selected_models[user_id] = ""
-    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '기본 모델 응답'})}", "data: [DONE]"])
-    update, context = make_update_context(user_id=user_id, text="기본 질문", client=client)
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '기본 모델 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+    update, context = make_update_context(
+        user_id=user_id, text="기본 질문", client=client
+    )
 
     asyncio.run(bot.handle_message(update, context))
 
@@ -811,11 +978,20 @@ def test_empty_selected_model_falls_back_to_default_gateway_behavior(make_update
     }
 
 
-def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_update_context):
+def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(
+    make_update_context,
+):
     user_id = 224
     bot.user_selected_models[user_id] = "   "
-    client = FakeClient(stream_lines=[f"data: {json.dumps({'response': '공백 모델 응답'})}", "data: [DONE]"])
-    update, context = make_update_context(user_id=user_id, text="공백 질문", client=client)
+    client = FakeClient(
+        stream_lines=[
+            f"data: {json.dumps({'response': '공백 모델 응답'})}",
+            "data: [DONE]",
+        ]
+    )
+    update, context = make_update_context(
+        user_id=user_id, text="공백 질문", client=client
+    )
 
     asyncio.run(bot.handle_message(update, context))
 
@@ -826,13 +1002,26 @@ def test_whitespace_selected_model_falls_back_to_default_gateway_behavior(make_u
 
 
 def test_preset_constants_are_defined_centrally():
-    assert tuple(bot.STATIC_PRESET_DEFINITIONS.keys()) == ("normal", "coder", "english", "quant")
+    assert tuple(bot.STATIC_PRESET_DEFINITIONS.keys()) == (
+        "normal",
+        "coder",
+        "english",
+        "quant",
+    )
     assert bot.DEFAULT_PRESET == "normal"
-    assert set(bot.STATIC_PRESET_DEFINITIONS.keys()) == {"normal", "coder", "english", "quant"}
+    assert set(bot.STATIC_PRESET_DEFINITIONS.keys()) == {
+        "normal",
+        "coder",
+        "english",
+        "quant",
+    }
 
 
 def test_preset_prefix_and_description_values_match_gateway_contract():
-    assert bot.STATIC_PRESET_DEFINITIONS["normal"] == {"description": "Balanced assistant for general use.", "prompt_prefix": ""}
+    assert bot.STATIC_PRESET_DEFINITIONS["normal"] == {
+        "description": "Balanced assistant for general use.",
+        "prompt_prefix": "",
+    }
     assert bot.STATIC_PRESET_DEFINITIONS["coder"] == {
         "description": "Focused on programming and debugging tasks.",
         "prompt_prefix": "You are a practical coding assistant. Be precise and production-minded.\n\n",
@@ -880,13 +1069,18 @@ def test_non_default_presets_are_forwarded_without_local_prefix_injection(
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="후속 질문", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="후속 질문", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     payload = client.stream_calls[0]["json"]
     assert payload["prompt"] == "User: 이전 질문\nAI: 이전 답변\nUser: 후속 질문\nAI:"
     assert payload["preset"] == selected_preset
-    assert bot.STATIC_PRESET_DEFINITIONS[selected_preset]["prompt_prefix"] not in payload["prompt"]
+    assert (
+        bot.STATIC_PRESET_DEFINITIONS[selected_preset]["prompt_prefix"]
+        not in payload["prompt"]
+    )
 
 
 def test_handle_message_forwards_active_preset_in_gateway_payload(make_update_context):
@@ -899,7 +1093,9 @@ def test_handle_message_forwards_active_preset_in_gateway_payload(make_update_co
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="리팩토링 해줘", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="리팩토링 해줘", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {
@@ -918,7 +1114,9 @@ def test_invalid_preset_falls_back_to_normal_in_payload(make_update_context):
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="기본 동작", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="기본 동작", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     assert bot.resolve_active_preset(user_id) == "normal"
@@ -935,7 +1133,9 @@ def test_preset_is_normalized_before_resolution():
     assert bot.resolve_active_preset(user_id) == "coder"
 
 
-def test_setting_english_preset_via_command_applies_to_followup_payload(make_update_context):
+def test_setting_english_preset_via_command_applies_to_followup_payload(
+    make_update_context,
+):
     user_id = 913
     preset_update, preset_context = make_update_context(
         user_id=user_id,
@@ -977,7 +1177,9 @@ def test_english_preset_is_forwarded_in_payload(make_update_context):
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="Please answer", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="Please answer", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {
@@ -996,7 +1198,9 @@ def test_quant_preset_is_forwarded_in_payload(make_update_context):
         ]
     )
 
-    update, context = make_update_context(user_id=user_id, text="분석해줘", client=client)
+    update, context = make_update_context(
+        user_id=user_id, text="분석해줘", client=client
+    )
     asyncio.run(bot.handle_message(update, context))
 
     assert client.stream_calls[0]["json"] == {

@@ -22,17 +22,17 @@ from telegram.ext import (
 from commands.ops import (
     OperationalCommandDependencies,
     configure_operational_dependencies,
-    health_command,
-    help_command,
-    models_command,
+    health_command,  # noqa: F401 - re-exported for tests and legacy callers.
+    help_command,  # noqa: F401 - re-exported for tests and legacy callers.
+    models_command,  # noqa: F401 - re-exported for tests and legacy callers.
     register_operational_handlers,
-    reload_presets_command,
-    status_command,
-    version_command,
+    reload_presets_command,  # noqa: F401 - re-exported for tests and legacy callers.
+    status_command,  # noqa: F401 - re-exported for tests and legacy callers.
+    version_command,  # noqa: F401 - re-exported for tests and legacy callers.
 )
 from commands.sessions import SessionCommandDependencies, build_session_handlers
 from document_summary import (
-    DEFAULT_DOCUMENT_SUMMARY_MODE,
+    DEFAULT_DOCUMENT_SUMMARY_MODE,  # noqa: F401 - re-exported for tests and legacy callers.
     DocumentValidationError,
     SUPPORTED_DOCUMENT_SUMMARY_MODES,
     build_document_summary_prompt as build_document_summary_prompt_helper,
@@ -124,6 +124,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class RuntimeState:
@@ -285,7 +286,9 @@ def load_bot_state() -> None:
     runtime_state.user_selected_presets.clear()
     runtime_state.user_selected_presets.update(loaded_state["selected_presets"])
     runtime_state.user_document_summary_modes.clear()
-    runtime_state.user_document_summary_modes.update(loaded_state["document_summary_modes"])
+    runtime_state.user_document_summary_modes.update(
+        loaded_state["document_summary_modes"]
+    )
 
 
 def get_static_presets() -> dict[str, dict[str, str]]:
@@ -322,8 +325,12 @@ def normalize_gateway_presets(payload) -> dict[str, dict[str, str]]:
         description = item.get("description")
         prompt_prefix = item.get("prompt_prefix")
         normalized[name] = {
-            PRESET_DESCRIPTION_FIELD: description.strip() if isinstance(description, str) else "",
-            PRESET_PROMPT_PREFIX_FIELD: prompt_prefix if isinstance(prompt_prefix, str) else "",
+            PRESET_DESCRIPTION_FIELD: description.strip()
+            if isinstance(description, str)
+            else "",
+            PRESET_PROMPT_PREFIX_FIELD: prompt_prefix
+            if isinstance(prompt_prefix, str)
+            else "",
         }
 
     return normalized
@@ -420,7 +427,9 @@ def get_session_reset_token(user_id: int, session_name: str) -> int:
 def increment_session_reset_token(user_id: int, session_name: str) -> int:
     current_token = get_session_reset_token(user_id, session_name)
     next_token = current_token + 1
-    runtime_state.user_reset_tokens[user_id][normalize_session_name(session_name)] = next_token
+    runtime_state.user_reset_tokens[user_id][normalize_session_name(session_name)] = (
+        next_token
+    )
     return next_token
 
 
@@ -696,7 +705,9 @@ def build_prompt_with_preset(
     presets: dict[str, dict[str, str]] | None = None,
 ) -> str:
     available_presets = presets if presets is not None else get_static_presets()
-    return build_prompt_with_preset_helper(history_lines, active_preset, available_presets)
+    return build_prompt_with_preset_helper(
+        history_lines, active_preset, available_presets
+    )
 
 
 def build_gateway_payload(
@@ -727,7 +738,9 @@ def build_supported_document_filter():
     return merged_filter
 
 
-def build_document_summary_prompt(file_name: str, content: str, mode: str | None = None) -> str:
+def build_document_summary_prompt(
+    file_name: str, content: str, mode: str | None = None
+) -> str:
     return build_document_summary_prompt_helper(file_name, content, mode=mode)
 
 
@@ -754,7 +767,9 @@ WIKI_HELP_MESSAGE = "\n".join(
 
 
 def parse_allowed_telegram_user_ids(raw_value: str | None = None) -> set[int]:
-    source = os.getenv("ALLOWED_TELEGRAM_USER_IDS", "") if raw_value is None else raw_value
+    source = (
+        os.getenv("ALLOWED_TELEGRAM_USER_IDS", "") if raw_value is None else raw_value
+    )
     allowed_ids: set[int] = set()
     for item in source.split(","):
         normalized = item.strip()
@@ -809,6 +824,13 @@ def build_wiki_accepted_message(command: str, job_id: str) -> str:
     )
 
 
+def resolve_wiki_send_accepted_message() -> bool:
+    raw_value = (
+        os.getenv("OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE", "false").strip().lower()
+    )
+    return raw_value in {"1", "true", "yes", "on"}
+
+
 def resolve_obsidian_notification_poll_seconds() -> float:
     raw_value = os.getenv("OBSIDIAN_NOTIFICATION_POLL_SECONDS", "5").strip()
     if not raw_value:
@@ -827,7 +849,9 @@ def resolve_wiki_auto_result_timeout_seconds() -> int:
     try:
         return max(0, int(float(raw_value)))
     except ValueError:
-        logger.warning("invalid_obsidian_wiki_auto_result_timeout_seconds value=%s", raw_value)
+        logger.warning(
+            "invalid_obsidian_wiki_auto_result_timeout_seconds value=%s", raw_value
+        )
         return 0
 
 
@@ -835,7 +859,11 @@ def build_obsidian_status_message(payload) -> str:
     if not isinstance(payload, dict):
         return "Obsidian 상태를 해석할 수 없어요."
 
-    queue = payload.get("queue_counts") if isinstance(payload.get("queue_counts"), dict) else None
+    queue = (
+        payload.get("queue_counts")
+        if isinstance(payload.get("queue_counts"), dict)
+        else None
+    )
     if queue is None:
         queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
 
@@ -868,7 +896,9 @@ def build_obsidian_status_message(payload) -> str:
             if value is not None:
                 job_summary_parts.append(f"{key}={value}")
         if job_summary_parts:
-            worker_lines.append("  - last_finished_job: " + ", ".join(job_summary_parts))
+            worker_lines.append(
+                "  - last_finished_job: " + ", ".join(job_summary_parts)
+            )
     elif last_finished_job is not None:
         worker_lines.append(f"  - last_finished_job: {last_finished_job}")
 
@@ -906,7 +936,9 @@ def build_obsidian_job_result_message(payload: object) -> str:
     if normalized_status == "failed":
         error_text = payload.get("error_text")
         if isinstance(error_text, str) and error_text.strip():
-            return f"위키 작업이 실패했어요. job_id={job_id}\n오류: {error_text.strip()}"
+            return (
+                f"위키 작업이 실패했어요. job_id={job_id}\n오류: {error_text.strip()}"
+            )
         return f"위키 작업이 실패했어요. job_id={job_id}"
 
     if normalized_status == "expired":
@@ -937,7 +969,8 @@ def build_obsidian_job_result_message(payload: object) -> str:
                         ]
                         if normalized_references:
                             rendered += "\n\n참고:\n" + "\n".join(
-                                f"- {reference}" for reference in normalized_references[:5]
+                                f"- {reference}"
+                                for reference in normalized_references[:5]
                             )
                 else:
                     rendered = raw_result_text
@@ -960,11 +993,16 @@ async def mark_obsidian_job_notified(client, job_id: str) -> bool:
         )
         response.raise_for_status()
     except (httpx.RequestError, httpx.HTTPStatusError) as error:
-        logger.warning("obsidian_mark_notified_failed job_id=%s error=%s", job_id, error)
+        logger.warning(
+            "obsidian_mark_notified_failed job_id=%s error=%s", job_id, error
+        )
         return False
     return True
 
-async def _send_chunked_message_to_chat(bot_client, chat_id: int | str, text: str) -> None:
+
+async def _send_chunked_message_to_chat(
+    bot_client, chat_id: int | str, text: str
+) -> None:
     for chunk in split_telegram_text(text):
         await bot_client.send_message(chat_id=chat_id, text=chunk)
 
@@ -999,7 +1037,11 @@ async def poll_obsidian_job_notification_once(app) -> bool:
         response.raise_for_status()
         payload = response.json()
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
-        logger.warning("obsidian_notification_poll_failed request_id=%s error=%s", request_id, error)
+        logger.warning(
+            "obsidian_notification_poll_failed request_id=%s error=%s",
+            request_id,
+            error,
+        )
         return False
 
     if not payload:
@@ -1007,7 +1049,9 @@ async def poll_obsidian_job_notification_once(app) -> bool:
     if isinstance(payload, dict) and isinstance(payload.get("job"), dict):
         payload = payload["job"]
     if not isinstance(payload, dict):
-        logger.warning("obsidian_notification_unexpected_payload request_id=%s", request_id)
+        logger.warning(
+            "obsidian_notification_unexpected_payload request_id=%s", request_id
+        )
         return False
 
     job_id = extract_obsidian_job_id(payload)
@@ -1019,7 +1063,9 @@ async def poll_obsidian_job_notification_once(app) -> bool:
     try:
         message = build_obsidian_job_result_message(payload)
     except Exception as error:  # Defensive fallback so one malformed result does not block notification forever.
-        logger.warning("obsidian_notification_render_failed job_id=%s error=%s", job_id, error)
+        logger.warning(
+            "obsidian_notification_render_failed job_id=%s error=%s", job_id, error
+        )
         message = f"위키 작업이 완료됐어요. job_id={job_id}\n결과를 표시하지 못했어요. /wiki result {job_id} 로 확인해 주세요."
 
     if not message.strip():
@@ -1028,7 +1074,12 @@ async def poll_obsidian_job_notification_once(app) -> bool:
     try:
         await _send_chunked_message_to_chat(app.bot, chat_id, message)
     except Exception as error:
-        logger.warning("obsidian_notification_send_failed job_id=%s chat_id=%s error=%s", job_id, chat_id, error)
+        logger.warning(
+            "obsidian_notification_send_failed job_id=%s chat_id=%s error=%s",
+            job_id,
+            chat_id,
+            error,
+        )
         return False
 
     return await mark_obsidian_job_notified(client, job_id)
@@ -1036,7 +1087,9 @@ async def poll_obsidian_job_notification_once(app) -> bool:
 
 async def obsidian_notification_poll_loop(app) -> None:
     interval_seconds = resolve_obsidian_notification_poll_seconds()
-    logger.info("obsidian_notification_poll_started interval_seconds=%s", interval_seconds)
+    logger.info(
+        "obsidian_notification_poll_started interval_seconds=%s", interval_seconds
+    )
     try:
         while True:
             await poll_obsidian_job_notification_once(app)
@@ -1115,7 +1168,9 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     client = context.application.bot_data.get(HTTP_CLIENT_KEY)
     if client is None:
-        await update.message.reply_text("위키 작업을 접수할 수 없어요. 잠시 후 다시 시도해주세요.")
+        await update.message.reply_text(
+            "위키 작업을 접수할 수 없어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     request_id = uuid.uuid4().hex[:12]
@@ -1136,8 +1191,15 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response.raise_for_status()
         job_id = extract_obsidian_job_id(response.json())
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
-        logger.warning("obsidian_job_create_failed request_id=%s user_id=%s error=%s", request_id, user_id, error)
-        await update.message.reply_text("위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요.")
+        logger.warning(
+            "obsidian_job_create_failed request_id=%s user_id=%s error=%s",
+            request_id,
+            user_id,
+            error,
+        )
+        await update.message.reply_text(
+            "위키 작업을 접수하지 못했어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     if subcommand == "ask":
@@ -1147,7 +1209,8 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await mark_obsidian_job_notified(client, job_id)
             return
 
-    await update.message.reply_text(build_wiki_accepted_message(subcommand, job_id))
+    if resolve_wiki_send_accepted_message():
+        await update.message.reply_text(build_wiki_accepted_message(subcommand, job_id))
 
 
 async def poll_wiki_ask_result(client, job_id: str) -> str | None:
@@ -1175,7 +1238,9 @@ async def poll_wiki_ask_result(client, job_id: str) -> str | None:
             logger.info("obsidian_ask_auto_result_poll_timeout job_id=%s", job_id)
             return None
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
-            logger.warning("obsidian_ask_auto_result_poll_failed job_id=%s error=%s", job_id, error)
+            logger.warning(
+                "obsidian_ask_auto_result_poll_failed job_id=%s error=%s", job_id, error
+            )
             return None
 
         if not isinstance(payload, dict):
@@ -1194,7 +1259,9 @@ async def poll_wiki_ask_result(client, job_id: str) -> str | None:
 async def wiki_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = context.application.bot_data.get(HTTP_CLIENT_KEY)
     if client is None:
-        await update.message.reply_text("위키 상태를 확인할 수 없어요. 잠시 후 다시 시도해주세요.")
+        await update.message.reply_text(
+            "위키 상태를 확인할 수 없어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     request_id = uuid.uuid4().hex[:12]
@@ -1206,8 +1273,12 @@ async def wiki_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         response.raise_for_status()
         payload = response.json()
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
-        logger.warning("obsidian_status_failed request_id=%s error=%s", request_id, error)
-        await update.message.reply_text("위키 상태를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        logger.warning(
+            "obsidian_status_failed request_id=%s error=%s", request_id, error
+        )
+        await update.message.reply_text(
+            "위키 상태를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     await update.message.reply_text(build_obsidian_status_message(payload))
@@ -1220,7 +1291,9 @@ async def wiki_job_result_command(
 ) -> None:
     client = context.application.bot_data.get(HTTP_CLIENT_KEY)
     if client is None:
-        await update.message.reply_text("위키 작업 결과를 확인할 수 없어요. 잠시 후 다시 시도해주세요.")
+        await update.message.reply_text(
+            "위키 작업 결과를 확인할 수 없어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     request_id = uuid.uuid4().hex[:12]
@@ -1233,14 +1306,22 @@ async def wiki_job_result_command(
         response.raise_for_status()
         payload = response.json()
     except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as error:
-        logger.warning("obsidian_job_result_failed request_id=%s job_id=%s error=%s", request_id, job_id, error)
-        await update.message.reply_text("위키 작업 결과를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+        logger.warning(
+            "obsidian_job_result_failed request_id=%s job_id=%s error=%s",
+            request_id,
+            job_id,
+            error,
+        )
+        await update.message.reply_text(
+            "위키 작업 결과를 불러오지 못했어요. 잠시 후 다시 시도해주세요."
+        )
         return
 
     message = build_obsidian_job_result_message(payload)
     if not message.strip():
         message = "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
     await _send_chunked_message_as_replies(update, message)
+
 
 async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1265,7 +1346,9 @@ async def docmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with lock:
         runtime_state.user_document_summary_modes[user_id] = requested_mode
         request_state_save("docmode_change")
-    await update.message.reply_text(f"문서 요약 모드가 변경되었습니다: {requested_mode}")
+    await update.message.reply_text(
+        f"문서 요약 모드가 변경되었습니다: {requested_mode}"
+    )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1358,7 +1441,9 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    requested_preset = normalize_preset_name(" ".join(context.args)) if context.args else ""
+    requested_preset = (
+        normalize_preset_name(" ".join(context.args)) if context.args else ""
+    )
 
     presets = get_presets_from_bot_data(context.application.bot_data)
 
@@ -1378,7 +1463,9 @@ async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     active_preset = resolve_active_preset(user_id, presets)
-    await update.message.reply_text(build_preset_overview_message(active_preset, presets))
+    await update.message.reply_text(
+        build_preset_overview_message(active_preset, presets)
+    )
 
 
 def build_preset_overview_message(
@@ -1399,7 +1486,9 @@ def build_preset_overview_message(
     return "\n".join(lines)
 
 
-def build_ctx_message(user_id: int, presets: dict[str, dict[str, str]] | None = None) -> str:
+def build_ctx_message(
+    user_id: int, presets: dict[str, dict[str, str]] | None = None
+) -> str:
     available_presets = (
         presets if presets is not None else get_presets_from_bot_data(None)
     )
@@ -1671,7 +1760,9 @@ async def _finalize_message_turn(
                 f"User: {user_text}",
                 f"AI: {result}",
             ]
-            ensure_user_sessions(user_id)[active_session] = updated_history[-MAX_HISTORY:]
+            ensure_user_sessions(user_id)[active_session] = updated_history[
+                -MAX_HISTORY:
+            ]
             request_state_save("conversation_finalize")
         finally:
             runtime_state.user_next_turn_to_finalize[user_id] = turn_id + 1
@@ -1693,7 +1784,11 @@ async def _create_waiting_message(
     try:
         return await update.message.reply_text(waiting_text)
     except Exception as waiting_msg_error:
-        if request_id is not None and request_start_ts is not None and user_id is not None:
+        if (
+            request_id is not None
+            and request_start_ts is not None
+            and user_id is not None
+        ):
             latency_ms = int((time.monotonic() - request_start_ts) * 1000)
             logger.error(
                 f"{error_event_name} request_id={request_id} "
@@ -2104,6 +2199,7 @@ configure_operational_dependencies(
         extract_model_names=extract_model_names,
     )
 )
+
 
 def main():
     if not BOT_TOKEN:
