@@ -228,7 +228,7 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
-    "/wiki ask|ingest|capture|draft|status - Obsidian 위키 작업 요청",
+    "/wiki ask|ingest|status|result - opencode 위키 작업 요청",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -755,13 +755,18 @@ def get_user_document_summary_mode(user_id: int) -> str:
 
 WIKI_HELP_MESSAGE = "\n".join(
     [
+        "Telegram /wiki는 opencode 기반 위키 작업 명령 채널입니다.",
+        "소스 메모 작성/편집은 Obsidian에서 하고, 봇은 작업 제출과 결과 전달만 합니다.",
         "사용법:",
         "/wiki ask <question>",
         "/wiki ingest",
-        "/wiki capture <text>",
-        "/wiki draft <topic>",
         "/wiki status [job_id]",
         "/wiki result <job_id>",
+        "계획/지원 작업:",
+        "/wiki update <request>",
+        "/wiki save <request>",
+        "/wiki lint [target]",
+        "/wiki refactor --preview <request>",
     ]
 )
 
@@ -807,6 +812,16 @@ def extract_obsidian_job_id(payload) -> str:
         if isinstance(job_id, int):
             return str(job_id)
     return "unknown"
+
+
+def build_wiki_work_payload(subcommand: str, rest: str) -> dict[str, object]:
+    if subcommand in {"update", "save"}:
+        return {"request": rest}
+    if subcommand == "lint":
+        return {"target": rest} if rest else {}
+    if subcommand == "refactor":
+        return {"request": rest.removeprefix("--preview").strip(), "preview": True}
+    return {}
 
 
 def build_wiki_accepted_message(command: str, job_id: str) -> str:
@@ -1148,6 +1163,21 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(WIKI_HELP_MESSAGE)
             return
         job_payload = {"topic": rest}
+    elif subcommand in {"update", "save"}:
+        if not rest:
+            await update.message.reply_text(WIKI_HELP_MESSAGE)
+            return
+        job_payload = build_wiki_work_payload(subcommand, rest)
+    elif subcommand == "lint":
+        job_payload = build_wiki_work_payload(subcommand, rest)
+    elif subcommand == "refactor":
+        if (
+            not rest.startswith("--preview")
+            or not rest.removeprefix("--preview").strip()
+        ):
+            await update.message.reply_text(WIKI_HELP_MESSAGE)
+            return
+        job_payload = build_wiki_work_payload(subcommand, rest)
     elif subcommand == "status":
         job_id = extract_wiki_job_id(context.args[1:])
         if job_id is None:

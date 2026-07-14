@@ -1,12 +1,12 @@
 # telegram-ai-bot
 
-Telegram bot that acts as a mobile UI for AI Gateway-backed chat and Obsidian wiki jobs.
+Telegram bot that acts as a mobile UI for AI Gateway-backed chat and an opencode-backed Telegram wiki work command channel.
 
-## Obsidian wiki mode
+## Telegram wiki command channel
 
-The Telegram bot never reads the Obsidian vault. It only creates jobs through `ai-gateway` and displays results produced by the external `obsidian-mobile-worker`.
+The `/wiki` command is a Telegram channel for submitting wiki work jobs and receiving completed results. It is not an Obsidian memo input UI: source memo writing and editing happen in Obsidian.
 
-For `/wiki` commands, vault access and LLM/opencode work happen outside this bot on the MacBook worker. Do not configure a vault path or opencode command here.
+The Telegram bot never reads the Obsidian vault and never runs the wiki LLM or `opencode`. It only creates jobs through `ai-gateway` and displays results produced by the external opencode-backed worker. For `/wiki` commands, vault access and LLM/opencode work happen outside this bot on the MacBook worker. Do not configure a vault path or opencode command here.
 
 ### Environment
 
@@ -26,7 +26,7 @@ The bot auto-delivers completed Obsidian job results by polling ai-gateway notif
 
 ### Suppressing `/wiki` accepted messages
 
-By default the Telegram bot no longer sends an immediate “job accepted” message for `/wiki ask`, `/wiki capture`, `/wiki ingest`, or `/wiki draft`. Final results are still sent when the worker completes the job.
+By default the Telegram bot no longer sends an immediate “job accepted” message for `/wiki` work commands. Final results are still sent when the worker completes the job.
 
 To restore the old behavior:
 
@@ -39,8 +39,19 @@ OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE=true
 ```text
 /wiki ask <question>
 /wiki ingest
-/wiki capture <text>
-/wiki draft <topic>
 /wiki status [job_id]
 /wiki result <job_id>
 ```
+
+Keep using Obsidian for source memo writing and editing. Use Telegram `/wiki` to submit work requests and receive worker output.
+
+Planned or newly supported worker commands:
+
+```text
+/wiki update <request>
+/wiki save <request>
+/wiki lint [target]
+/wiki refactor --preview <request>
+```
+
+`/wiki update`, `/wiki save`, `/wiki lint`, and `/wiki refactor --preview` are passed through to the worker as jobs; the bot does not perform vault reads, edits, linting, refactors, or LLM execution itself.

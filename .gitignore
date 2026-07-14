@@ -3,3 +3,5 @@ __pycache__
 
 # Codex CLI local artifact
 .codex
+# Local runtime state
+data/

@@ -1269,15 +1269,13 @@ def test_wiki_ask_requires_question(make_update_context, monkeypatch):
     assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
 
 
-def test_wiki_capture_requires_text(make_update_context, monkeypatch):
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
-    update, context = make_update_context(
-        text="/wiki capture", client=FakeObsidianClient(), args=["capture"]
-    )
-
-    asyncio.run(bot.wiki_command(update, context))
-
-    assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
+def test_wiki_help_describes_worker_role_without_capture_workflow():
+    assert "작업 제출과 결과 전달만" in bot.WIKI_HELP_MESSAGE
+    assert "/wiki update <request>" in bot.WIKI_HELP_MESSAGE
+    assert "/wiki save <request>" in bot.WIKI_HELP_MESSAGE
+    assert "/wiki lint [target]" in bot.WIKI_HELP_MESSAGE
+    assert "/wiki refactor --preview <request>" in bot.WIKI_HELP_MESSAGE
+    assert "/wiki capture" not in bot.WIKI_HELP_MESSAGE
 
 
 def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
@@ -1309,6 +1307,41 @@ def test_wiki_draft_creates_job_without_accepted_message_by_default(
 
     assert client.calls[0]["json"]["command"] == "draft"
     assert client.calls[0]["json"]["payload"] == {"topic": "trip plan"}
+    assert update.message.replies == []
+
+
+def test_wiki_update_creates_worker_job(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "update-1"})
+    update, context = make_update_context(
+        text="/wiki update refresh project pages",
+        client=client,
+        args=["update", "refresh", "project", "pages"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"]["command"] == "update"
+    assert client.calls[0]["json"]["payload"] == {"request": "refresh project pages"}
+    assert update.message.replies == []
+
+
+def test_wiki_refactor_preview_creates_preview_job(make_update_context, monkeypatch):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "refactor-1"})
+    update, context = make_update_context(
+        text="/wiki refactor --preview split daily notes",
+        client=client,
+        args=["refactor", "--preview", "split", "daily", "notes"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"]["command"] == "refactor"
+    assert client.calls[0]["json"]["payload"] == {
+        "request": "split daily notes",
+        "preview": True,
+    }
     assert update.message.replies == []
 
 
