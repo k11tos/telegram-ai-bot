@@ -42,11 +42,42 @@ OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE=true
 /wiki update <instruction>
 /wiki lint [instruction]
 /wiki refactor --preview <instruction>
-/wiki draft <topic>
 /wiki status [job_id]
 /wiki result <job_id>
+/wiki draft <topic>  # Optional: create a standalone, unsaved draft
 ```
 
-New notes and edits are authored directly in the Obsidian app. The legacy `/wiki capture` command no longer creates a job; it directs users to Obsidian instead.
+`draft` remains available as a secondary workflow because it creates a standalone draft without first running a question. Prefer `ask` followed by `save` when a useful answer should become a note.
 
-Refactors are preview-only: `/wiki refactor` requires the literal `--preview` flag and a non-empty instruction. The bot submits the instruction as a job and does not inspect the vault or calculate the refactor itself.
+### Exact job payloads
+
+The bot forwards commands to `POST /obsidian/jobs` without reading the vault or implementing worker behavior. The common envelope is:
+
+```json
+{
+  "command": "<command>",
+  "payload": {},
+  "telegram_chat_id": 123,
+  "telegram_message_id": 456,
+  "requested_by": 789
+}
+```
+
+Command payloads are exactly:
+
+| Telegram command | `command` | `payload` |
+| --- | --- | --- |
+| `/wiki ask <question>` | `ask` | `{"question":"<question>"}` |
+| `/wiki save <ask_job_id>` | `save` | `{"source_job_id":"<ask_job_id>"}` |
+| `/wiki ingest` | `ingest` | `{}` |
+| `/wiki update <instruction>` | `update` | `{"instruction":"<instruction>"}` |
+| `/wiki lint` | `lint` | `{}` |
+| `/wiki lint <instruction>` | `lint` | `{"instruction":"<instruction>"}` |
+| `/wiki refactor --preview <instruction>` | `refactor` | `{"mode":"preview","instruction":"<instruction>"}` |
+| `/wiki draft <topic>` | `draft` | `{"topic":"<topic>"}` |
+
+`/wiki status` reads queue/worker status. `/wiki status <job_id>` and `/wiki result <job_id>` both read that job's result. Completed results are delivered back to the originating Telegram chat; successful `ask` results include the exact `/wiki save <ask_job_id>` follow-up.
+
+New notes and edits are authored directly in the Obsidian app. The legacy `/wiki capture` command is unsupported and creates no job; it only directs users to Obsidian. Apply-mode refactors are also unsupported and create no job.
+
+Refactors are preview-only: `/wiki refactor` requires the literal `--preview` flag and a non-empty instruction. `lint` and refactor preview are read-only worker operations. The bot submits requests and displays results; it does not inspect or mutate the vault, run OpenCode, calculate diffs, or decide which vault files a write command may change.

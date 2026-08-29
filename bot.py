@@ -228,7 +228,8 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
-    "/wiki ask|save|ingest|update|lint|refactor|draft|status|result - Obsidian 위키 작업 요청",
+    "/wiki ask|save|ingest|update|lint|refactor|status|result - Obsidian 위키 작업 요청",
+    "/wiki draft <topic> - (선택) 저장 전 독립 초안 작성",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -762,7 +763,7 @@ WIKI_HELP_MESSAGE = "\n".join(
         "/wiki update <파일 경로 또는 수정 내용 설명>",
         "/wiki lint [instruction]",
         "/wiki refactor --preview <instruction>",
-        "/wiki draft <topic>",
+        "/wiki draft <topic> - 선택: ask→save와 별개의 저장 전 독립 초안",
         "/wiki status [job_id]",
         "/wiki result <job_id>",
     ]
@@ -981,10 +982,10 @@ def build_obsidian_job_result_message(payload: object) -> str:
         return f"위키 작업이 아직 처리 중이에요. job_id={job_id} status={normalized_status}"
 
     if normalized_status == "failed":
-        error_text = payload.get("error_text")
-        if isinstance(error_text, str) and error_text.strip():
+        error_text = extract_failed_job_cause(payload.get("error_text"))
+        if error_text:
             return (
-                f"위키 작업이 실패했어요. job_id={job_id}\n오류: {error_text.strip()}"
+                f"위키 작업이 실패했어요. job_id={job_id}\n오류: {error_text}"
             )
         return f"위키 작업이 실패했어요. job_id={job_id}"
 
@@ -1028,6 +1029,40 @@ def build_obsidian_job_result_message(payload: object) -> str:
         return "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
 
     return rendered
+
+
+def extract_failed_job_cause(value: object) -> str:
+    """Render a worker failure as a useful cause rather than an envelope."""
+    if isinstance(value, dict):
+        for key in ("cause", "error_text", "error", "message", "detail", "stderr"):
+            cause = extract_failed_job_cause(value.get(key))
+            if cause:
+                return cause
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        return ""
+
+    text = value.strip()
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        decoded = None
+    if isinstance(decoded, (dict, str)) and decoded != value:
+        return extract_failed_job_cause(decoded)
+
+    # Worker/CLI adapters sometimes wrap a cause in an error marker. Telegram
+    # should show the cause, not leak that transport marker into user-facing UX.
+    marker_pattern = (
+        r"(?:\[|<|__)?(?:opencode[-_ ]?)?(?:marker[-_ ]?)?error(?:\]|>|__)?"
+    )
+    if re.fullmatch(marker_pattern, text, flags=re.IGNORECASE):
+        return ""
+    marker = re.match(
+        rf"^{marker_pattern}(?:\s*[:=-]\s*|\s+)(.+)$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return marker.group(1).strip() if marker else text
 
 
 def add_wiki_ask_save_hint(message: str, job_id: str) -> str:
