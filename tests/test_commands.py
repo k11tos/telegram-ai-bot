@@ -1208,7 +1208,7 @@ def test_wiki_ask_creates_job_without_accepted_message_by_default(
     assert update.message.replies == []
 
 
-def test_wiki_capture_creates_job_without_accepted_message_by_default(
+def test_legacy_wiki_capture_creates_no_job_and_returns_obsidian_guidance(
     make_update_context, monkeypatch
 ):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
@@ -1221,12 +1221,11 @@ def test_wiki_capture_creates_job_without_accepted_message_by_default(
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert client.calls[0]["json"]["command"] == "capture"
-    assert client.calls[0]["json"]["payload"] == {
-        "text": "quick note",
-        "source": "telegram",
-    }
-    assert update.message.replies == []
+    assert client.calls == []
+    assert update.message.replies == [
+        "/wiki capture는 더 이상 지원하지 않습니다. 새 메모 작성이나 편집은 Obsidian 앱에서 "
+        "직접 해주세요. 사용 가능한 명령은 /wiki help에서 확인할 수 있습니다."
+    ]
 
 
 def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch, caplog):
@@ -1258,6 +1257,12 @@ def test_wiki_missing_subcommand_shows_help(make_update_context, monkeypatch):
     assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
 
 
+def test_wiki_help_does_not_advertise_capture_and_describes_ingest_source_notes():
+    assert "capture" not in bot.WIKI_HELP_MESSAGE
+    assert "/wiki capture" not in bot.HELP_MESSAGE
+    assert "Obsidian에서 직접 작성한 소스 메모 처리" in bot.WIKI_HELP_MESSAGE
+
+
 def test_wiki_ask_requires_question(make_update_context, monkeypatch):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     update, context = make_update_context(
@@ -1269,7 +1274,9 @@ def test_wiki_ask_requires_question(make_update_context, monkeypatch):
     assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
 
 
-def test_wiki_capture_requires_text(make_update_context, monkeypatch):
+def test_legacy_wiki_capture_without_text_returns_obsidian_guidance(
+    make_update_context, monkeypatch
+):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     update, context = make_update_context(
         text="/wiki capture", client=FakeObsidianClient(), args=["capture"]
@@ -1277,7 +1284,7 @@ def test_wiki_capture_requires_text(make_update_context, monkeypatch):
 
     asyncio.run(bot.wiki_command(update, context))
 
-    assert update.message.replies[-1] == bot.WIKI_HELP_MESSAGE
+    assert update.message.replies[-1] == bot.WIKI_CAPTURE_REMOVED_MESSAGE
 
 
 def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
@@ -1317,20 +1324,20 @@ def test_wiki_send_accepted_message_env_restores_old_behavior(
 ):
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
     monkeypatch.setenv("OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE", "true")
-    client = FakeObsidianClient(post_payload={"job_id": "cap-accepted"})
+    client = FakeObsidianClient(post_payload={"job_id": "draft-accepted"})
     update, context = make_update_context(
-        text="/wiki capture quick note",
+        text="/wiki draft quick note",
         client=client,
-        args=["capture", "quick", "note"],
+        args=["draft", "quick", "note"],
     )
 
     asyncio.run(bot.wiki_command(update, context))
 
     assert update.message.replies[-1] == (
-        "위키 capture 작업을 접수했어요.\n"
-        "job_id=cap-accepted\n\n"
-        "저장 완료 후 이 채팅방으로 알려드릴게요.\n"
-        "검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
+        "위키 draft 작업을 접수했어요.\n"
+        "job_id=draft-accepted\n\n"
+        "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
+        "수동 확인: /wiki result draft-accepted"
     )
 
 
@@ -1908,8 +1915,4 @@ def test_wiki_accepted_messages_mention_automatic_delivery():
     assert (
         "완료되면 이 채팅방으로 결과를 보내드릴게요."
         in bot.build_wiki_accepted_message("ask", "a1")
-    )
-    assert (
-        "저장 완료 후 이 채팅방으로 알려드릴게요."
-        in bot.build_wiki_accepted_message("capture", "c1")
     )

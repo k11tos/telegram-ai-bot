@@ -228,7 +228,7 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
-    "/wiki ask|ingest|capture|draft|status - Obsidian 위키 작업 요청",
+    "/wiki ask|ingest|draft|status|result - Obsidian 위키 작업 요청",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -757,12 +757,16 @@ WIKI_HELP_MESSAGE = "\n".join(
     [
         "사용법:",
         "/wiki ask <question>",
-        "/wiki ingest",
-        "/wiki capture <text>",
+        "/wiki ingest - Obsidian에서 직접 작성한 소스 메모 처리",
         "/wiki draft <topic>",
         "/wiki status [job_id]",
         "/wiki result <job_id>",
     ]
+)
+
+WIKI_CAPTURE_REMOVED_MESSAGE = (
+    "/wiki capture는 더 이상 지원하지 않습니다. 새 메모 작성이나 편집은 Obsidian 앱에서 "
+    "직접 해주세요. 사용 가능한 명령은 /wiki help에서 확인할 수 있습니다."
 )
 
 
@@ -811,12 +815,6 @@ def extract_obsidian_job_id(payload) -> str:
 
 def build_wiki_accepted_message(command: str, job_id: str) -> str:
     base_message = f"위키 {command} 작업을 접수했어요.\njob_id={job_id}"
-    if command == "capture":
-        return (
-            f"{base_message}\n\n"
-            "저장 완료 후 이 채팅방으로 알려드릴게요.\n"
-            "검색/질문에 반영하려면 /wiki ingest 를 실행해 주세요."
-        )
     return (
         f"{base_message}\n\n"
         "완료되면 이 채팅방으로 결과를 보내드릴게요.\n"
@@ -1139,10 +1137,8 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif subcommand == "ingest":
         job_payload = {}
     elif subcommand == "capture":
-        if not rest:
-            await update.message.reply_text(WIKI_HELP_MESSAGE)
-            return
-        job_payload = {"text": rest, "source": "telegram"}
+        await update.message.reply_text(WIKI_CAPTURE_REMOVED_MESSAGE)
+        return
     elif subcommand == "draft":
         if not rest:
             await update.message.reply_text(WIKI_HELP_MESSAGE)
