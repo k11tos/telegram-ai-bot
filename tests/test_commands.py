@@ -1262,7 +1262,51 @@ def test_wiki_help_does_not_advertise_capture_and_describes_ingest_source_notes(
     assert "/wiki capture" not in bot.HELP_MESSAGE
     assert "Obsidian에서 직접 작성한 소스 메모 처리" in bot.WIKI_HELP_MESSAGE
     assert "/wiki update <파일 경로 또는 수정 내용 설명>" in bot.WIKI_HELP_MESSAGE
-    assert "ask|ingest|update|draft|status|result" in bot.HELP_MESSAGE
+    assert "ask|save|ingest|update|draft|status|result" in bot.HELP_MESSAGE
+    assert "/wiki save <ask_job_id>" in bot.WIKI_HELP_MESSAGE
+
+
+def test_wiki_save_creates_job_with_exact_source_job_payload(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "save-1"})
+    update, context = make_update_context(
+        user_id=123,
+        chat_id=456,
+        text="/wiki save ask-42",
+        client=client,
+        args=["save", "ask-42"],
+    )
+    update.message.message_id = 789
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"] == {
+        "command": "save",
+        "payload": {"source_job_id": "ask-42"},
+        "telegram_chat_id": 456,
+        "telegram_message_id": 789,
+        "requested_by": 123,
+    }
+    assert update.message.replies == []
+
+
+def test_wiki_save_missing_or_blank_id_creates_no_job(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+
+    for args in (["save"], ["save", "  "]):
+        client = FakeObsidianClient()
+        update, context = make_update_context(
+            text="/wiki save", client=client, args=args
+        )
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert client.calls == []
+        assert update.message.replies == [bot.WIKI_SAVE_USAGE_MESSAGE]
 
 
 def test_wiki_ask_requires_question(make_update_context, monkeypatch):
@@ -1615,7 +1659,123 @@ def test_wiki_ask_auto_result_polling_immediate_success(
 
     assert [call["method"] for call in client.calls] == ["POST", "GET", "POST"]
     assert client.calls[-1]["path"] == "/obsidian/jobs/ask-fast/notified"
-    assert update.message.replies[-1] == "바로 완료"
+    assert update.message.replies[-1] == "바로 완료\n\n저장: /wiki save ask-fast"
+
+
+def test_wiki_ask_result_does_not_duplicate_worker_save_hint(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+    worker_answer = "완료 답변\n\n저장하려면 /wiki save ask-hinted"
+    client = FakeObsidianClient(
+        post_payload={"job_id": "ask-hinted"},
+        get_payloads={
+            "/obsidian/jobs/ask-hinted": [
+                {
+                    "job_id": "ask-hinted",
+                    "status": "succeeded",
+                    "result_text": json.dumps({"answer": worker_answer}),
+                }
+            ]
+        },
+    )
+    update, context = make_update_context(
+        text="/wiki ask hinted?", client=client, args=["ask", "hinted?"]
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert update.message.replies[-1] == worker_answer
+    assert update.message.replies[-1].lower().count("/wiki save") == 1
+
+
+def test_wiki_ask_result_adds_current_hint_for_other_or_bare_save_command(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+    cases = [
+        "다른 답변 저장: /wiki save ask-other",
+        "명령 형식은 /wiki save 다음에 작업 ID를 붙입니다.",
+    ]
+
+    for index, worker_answer in enumerate(cases):
+        job_id = f"ask-current-{index}"
+        client = FakeObsidianClient(
+            post_payload={"job_id": job_id},
+            get_payloads={
+                f"/obsidian/jobs/{job_id}": [
+                    {
+                        "job_id": job_id,
+                        "status": "succeeded",
+                        "result_text": json.dumps({"answer": worker_answer}),
+                    }
+                ]
+            },
+        )
+        update, context = make_update_context(
+            text="/wiki ask save syntax?",
+            client=client,
+            args=["ask", "save", "syntax?"],
+        )
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert update.message.replies[-1] == (
+            f"{worker_answer}\n\n저장: /wiki save {job_id}"
+        )
+
+
+def test_wiki_save_hint_matching_respects_exact_job_id_token_boundaries():
+    job_id = "ask-12"
+
+    assert bot.contains_wiki_save_command_for_job("/wiki save ask-12", job_id)
+    assert bot.contains_wiki_save_command_for_job("저장: /WIKI SAVE ask-12.", job_id)
+    assert bot.contains_wiki_save_command_for_job("`/wiki save ask-12`", job_id)
+    assert not bot.contains_wiki_save_command_for_job("/wiki save", job_id)
+    assert not bot.contains_wiki_save_command_for_job("/wiki save ask-123", job_id)
+    assert not bot.contains_wiki_save_command_for_job("/wiki save ask-1", job_id)
+
+
+def test_wiki_ask_auto_result_failed_and_expired_do_not_include_save_hint(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+    cases = [
+        (
+            "failed",
+            {"error_text": "worker timeout"},
+            "위키 작업이 실패했어요. job_id=ask-failed\n오류: worker timeout",
+        ),
+        (
+            "expired",
+            {},
+            "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요.",
+        ),
+    ]
+
+    for status, extra_payload, expected_message in cases:
+        job_id = f"ask-{status}"
+        client = FakeObsidianClient(
+            post_payload={"job_id": job_id},
+            get_payloads={
+                f"/obsidian/jobs/{job_id}": [
+                    {"job_id": job_id, "status": status, **extra_payload}
+                ]
+            },
+        )
+        update, context = make_update_context(
+            text="/wiki ask terminal?",
+            client=client,
+            args=["ask", "terminal?"],
+        )
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert update.message.replies[-1] == expected_message
+        assert "/wiki save" not in update.message.replies[-1]
 
 
 def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(
@@ -1745,6 +1905,7 @@ def test_wiki_job_result_failed_status_includes_error_text(
         get_payloads={
             "/obsidian/jobs/job-failed": {
                 "job_id": "job-failed",
+                "command": "ask",
                 "status": "failed",
                 "error_text": "worker timeout",
             }
@@ -1772,6 +1933,7 @@ def test_wiki_job_result_expired_status_returns_retry_message(
         get_payloads={
             "/obsidian/jobs/job-expired": {
                 "job_id": "job-expired",
+                "command": "ask",
                 "status": "expired",
             }
         }
@@ -1925,6 +2087,7 @@ def test_obsidian_notification_succeeded_job_sends_rendered_answer_and_marks_not
     client = FakeObsidianClient(
         get_payload={
             "job_id": "job-100",
+            "command": "ingest",
             "status": "succeeded",
             "telegram_chat_id": 777,
             "result_text": json.dumps({"answer": "완료 답변", "references": ["A.md"]}),
@@ -1941,6 +2104,27 @@ def test_obsidian_notification_succeeded_job_sends_rendered_answer_and_marks_not
     ]
     assert client.calls[-1]["method"] == "POST"
     assert client.calls[-1]["path"] == "/obsidian/jobs/job-100/notified"
+
+
+def test_obsidian_notification_ask_result_includes_job_id_save_hint():
+    client = FakeObsidianClient(
+        get_payload={
+            "job_id": "ask-100",
+            "command": "ask",
+            "status": "succeeded",
+            "telegram_chat_id": 777,
+            "result_text": json.dumps({"answer": "완료 답변"}),
+        }
+    )
+    telegram_bot = FakeTelegramBot()
+    app = make_fake_app(client, telegram_bot)
+
+    delivered = asyncio.run(bot.poll_obsidian_job_notification_once(app))
+
+    assert delivered is True
+    assert telegram_bot.sent_messages == [
+        {"chat_id": 777, "text": "완료 답변\n\n저장: /wiki save ask-100"}
+    ]
 
 
 def test_obsidian_notification_failed_job_sends_error_and_marks_notified():

@@ -228,7 +228,7 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
-    "/wiki ask|ingest|update|draft|status|result - Obsidian 위키 작업 요청",
+    "/wiki ask|save|ingest|update|draft|status|result - Obsidian 위키 작업 요청",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -757,6 +757,7 @@ WIKI_HELP_MESSAGE = "\n".join(
     [
         "사용법:",
         "/wiki ask <question>",
+        "/wiki save <ask_job_id>",
         "/wiki ingest - Obsidian에서 직접 작성한 소스 메모 처리",
         "/wiki update <파일 경로 또는 수정 내용 설명>",
         "/wiki draft <topic>",
@@ -766,6 +767,7 @@ WIKI_HELP_MESSAGE = "\n".join(
 )
 
 WIKI_UPDATE_USAGE_MESSAGE = "사용법: /wiki update <파일 경로 또는 수정 내용 설명>"
+WIKI_SAVE_USAGE_MESSAGE = "사용법: /wiki save <ask_job_id>"
 
 WIKI_CAPTURE_REMOVED_MESSAGE = (
     "/wiki capture는 더 이상 지원하지 않습니다. 새 메모 작성이나 편집은 Obsidian 앱에서 "
@@ -997,6 +999,37 @@ def build_obsidian_job_result_message(payload: object) -> str:
     return rendered
 
 
+def add_wiki_ask_save_hint(message: str, job_id: str) -> str:
+    """Add Telegram save affordance without interpreting the worker result."""
+    if contains_wiki_save_command_for_job(message, job_id):
+        return message
+    return f"{message}\n\n저장: /wiki save {job_id}"
+
+
+def contains_wiki_save_command_for_job(message: str, job_id: str) -> bool:
+    command_pattern = (
+        r"(?:^|[\s`'\"(\[{>])(?i:/wiki[ \t]+save)[ \t]+"
+        + re.escape(job_id)
+        + r"(?=$|[\s`'\".,!?;:)\]}>])"
+    )
+    return re.search(command_pattern, message) is not None
+
+
+def has_successfully_available_obsidian_result(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    status = payload.get("status")
+    normalized_status = status.strip().lower() if isinstance(status, str) else ""
+    if normalized_status != "succeeded":
+        return False
+
+    result_text = payload.get("result_text")
+    if isinstance(result_text, str):
+        return bool(result_text.strip())
+    return result_text is not None and bool(str(result_text).strip())
+
+
 async def mark_obsidian_job_notified(client, job_id: str) -> bool:
     request_id = uuid.uuid4().hex[:12]
     notify_path = OBSIDIAN_JOB_NOTIFIED_PATH_TEMPLATE.format(job_id=job_id)
@@ -1076,6 +1109,13 @@ async def poll_obsidian_job_notification_once(app) -> bool:
 
     try:
         message = build_obsidian_job_result_message(payload)
+        command = payload.get("command")
+        if (
+            isinstance(command, str)
+            and command.strip().lower() == "ask"
+            and has_successfully_available_obsidian_result(payload)
+        ):
+            message = add_wiki_ask_save_hint(message, job_id)
     except Exception as error:  # Defensive fallback so one malformed result does not block notification forever.
         logger.warning(
             "obsidian_notification_render_failed job_id=%s error=%s", job_id, error
@@ -1150,6 +1190,12 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(WIKI_HELP_MESSAGE)
             return
         job_payload = {"question": rest}
+    elif subcommand == "save":
+        source_job_id = extract_wiki_job_id(context.args[1:])
+        if source_job_id is None:
+            await update.message.reply_text(WIKI_SAVE_USAGE_MESSAGE)
+            return
+        job_payload = {"source_job_id": source_job_id}
     elif subcommand == "ingest":
         job_payload = {}
     elif subcommand == "update":
@@ -1271,7 +1317,10 @@ async def poll_wiki_ask_result(client, job_id: str) -> str | None:
             if attempt_index < timeout_seconds - 1:
                 await asyncio.sleep(min(1, max(0, deadline - loop.time())))
             continue
-        return build_obsidian_job_result_message(payload)
+        message = build_obsidian_job_result_message(payload)
+        if has_successfully_available_obsidian_result(payload):
+            message = add_wiki_ask_save_hint(message, job_id)
+        return message
 
     return None
 
@@ -1338,6 +1387,13 @@ async def wiki_job_result_command(
         return
 
     message = build_obsidian_job_result_message(payload)
+    command = payload.get("command") if isinstance(payload, dict) else None
+    if (
+        isinstance(command, str)
+        and command.strip().lower() == "ask"
+        and has_successfully_available_obsidian_result(payload)
+    ):
+        message = add_wiki_ask_save_hint(message, job_id)
     if not message.strip():
         message = "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
     await _send_chunked_message_as_replies(update, message)
