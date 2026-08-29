@@ -1047,7 +1047,7 @@ def extract_failed_job_cause(value: object) -> str:
         decoded = json.loads(text)
     except json.JSONDecodeError:
         decoded = None
-    if decoded is not None and decoded != value:
+    if isinstance(decoded, (dict, str)) and decoded != value:
         return extract_failed_job_cause(decoded)
 
     # Worker/CLI adapters sometimes wrap a cause in an error marker. Telegram
