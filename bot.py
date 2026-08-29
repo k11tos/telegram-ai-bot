@@ -228,7 +228,7 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
-    "/wiki ask|ingest|draft|status|result - Obsidian 위키 작업 요청",
+    "/wiki ask|ingest|update|draft|status|result - Obsidian 위키 작업 요청",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -758,11 +758,14 @@ WIKI_HELP_MESSAGE = "\n".join(
         "사용법:",
         "/wiki ask <question>",
         "/wiki ingest - Obsidian에서 직접 작성한 소스 메모 처리",
+        "/wiki update <파일 경로 또는 수정 내용 설명>",
         "/wiki draft <topic>",
         "/wiki status [job_id]",
         "/wiki result <job_id>",
     ]
 )
+
+WIKI_UPDATE_USAGE_MESSAGE = "사용법: /wiki update <파일 경로 또는 수정 내용 설명>"
 
 WIKI_CAPTURE_REMOVED_MESSAGE = (
     "/wiki capture는 더 이상 지원하지 않습니다. 새 메모 작성이나 편집은 Obsidian 앱에서 "
@@ -918,6 +921,19 @@ def extract_wiki_job_id(args: list[str]) -> str | None:
             return normalized
 
     return None
+
+
+def extract_wiki_update_instruction(message_text: str | None) -> str:
+    """Extract update text without interpreting or collapsing its internal whitespace."""
+    if not isinstance(message_text, str):
+        return ""
+
+    match = re.match(
+        r"^\s*/wiki(?:@[A-Za-z0-9_]+)?\s+update(?:\s|$)(.*)$",
+        message_text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else ""
 
 
 def build_obsidian_job_result_message(payload: object) -> str:
@@ -1136,6 +1152,14 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         job_payload = {"question": rest}
     elif subcommand == "ingest":
         job_payload = {}
+    elif subcommand == "update":
+        instruction = extract_wiki_update_instruction(
+            getattr(update.message, "text", None)
+        )
+        if not instruction:
+            await update.message.reply_text(WIKI_UPDATE_USAGE_MESSAGE)
+            return
+        job_payload = {"instruction": instruction}
     elif subcommand == "capture":
         await update.message.reply_text(WIKI_CAPTURE_REMOVED_MESSAGE)
         return
