@@ -40,6 +40,7 @@ OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE=true
 /wiki ask <question>
 /wiki ingest  # Process source notes already written directly in Obsidian
 /wiki update <instruction>
+/wiki lint [instruction]
 /wiki draft <topic>
 /wiki status [job_id]
 /wiki result <job_id>

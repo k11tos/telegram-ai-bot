@@ -1262,7 +1262,8 @@ def test_wiki_help_does_not_advertise_capture_and_describes_ingest_source_notes(
     assert "/wiki capture" not in bot.HELP_MESSAGE
     assert "Obsidian에서 직접 작성한 소스 메모 처리" in bot.WIKI_HELP_MESSAGE
     assert "/wiki update <파일 경로 또는 수정 내용 설명>" in bot.WIKI_HELP_MESSAGE
-    assert "ask|save|ingest|update|draft|status|result" in bot.HELP_MESSAGE
+    assert "/wiki lint [instruction]" in bot.WIKI_HELP_MESSAGE
+    assert "ask|save|ingest|update|lint|draft|status|result" in bot.HELP_MESSAGE
     assert "/wiki save <ask_job_id>" in bot.WIKI_HELP_MESSAGE
 
 
@@ -1400,6 +1401,66 @@ def test_wiki_update_missing_or_blank_instruction_creates_no_job(
 
         assert client.calls == []
         assert update.message.replies == [bot.WIKI_UPDATE_USAGE_MESSAGE]
+
+
+def test_wiki_lint_without_instruction_creates_exact_empty_payload(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "lint-1"})
+    update, context = make_update_context(
+        user_id=123,
+        chat_id=456,
+        text="/wiki lint",
+        client=client,
+        args=["lint"],
+    )
+    update.message.message_id = 789
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == [
+        {
+            "method": "POST",
+            "path": bot.OBSIDIAN_JOBS_PATH,
+            "json": {
+                "command": "lint",
+                "payload": {},
+                "telegram_chat_id": 456,
+                "telegram_message_id": 789,
+                "requested_by": 123,
+            },
+            "headers": client.calls[0]["headers"],
+        }
+    ]
+    assert update.message.replies == []
+
+
+def test_wiki_lint_with_instruction_creates_exact_instruction_payload(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "lint-2"})
+    update, context = make_update_context(
+        user_id=123,
+        chat_id=456,
+        text="/wiki lint   Fix  headings only\nKeep links unchanged   ",
+        client=client,
+        args=["lint", "Fix", "headings", "only", "Keep", "links", "unchanged"],
+    )
+    update.message.message_id = 790
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["path"] == bot.OBSIDIAN_JOBS_PATH
+    assert client.calls[0]["json"] == {
+        "command": "lint",
+        "payload": {"instruction": "Fix  headings only\nKeep links unchanged"},
+        "telegram_chat_id": 456,
+        "telegram_message_id": 790,
+        "requested_by": 123,
+    }
+    assert update.message.replies == []
 
 
 def test_existing_wiki_job_commands_keep_their_payloads(
