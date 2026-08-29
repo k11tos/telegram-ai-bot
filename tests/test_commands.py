@@ -1263,7 +1263,12 @@ def test_wiki_help_does_not_advertise_capture_and_describes_ingest_source_notes(
     assert "Obsidian에서 직접 작성한 소스 메모 처리" in bot.WIKI_HELP_MESSAGE
     assert "/wiki update <파일 경로 또는 수정 내용 설명>" in bot.WIKI_HELP_MESSAGE
     assert "/wiki lint [instruction]" in bot.WIKI_HELP_MESSAGE
-    assert "ask|save|ingest|update|lint|draft|status|result" in bot.HELP_MESSAGE
+    assert "/wiki refactor --preview <instruction>" in bot.WIKI_HELP_MESSAGE
+    assert "refactor" in bot.HELP_MESSAGE
+    assert (
+        "ask|save|ingest|update|lint|refactor|draft|status|result"
+        in bot.HELP_MESSAGE
+    )
     assert "/wiki save <ask_job_id>" in bot.WIKI_HELP_MESSAGE
 
 
@@ -1461,6 +1466,88 @@ def test_wiki_lint_with_instruction_creates_exact_instruction_payload(
         "requested_by": 123,
     }
     assert update.message.replies == []
+
+
+def test_wiki_refactor_preview_creates_job_with_exact_payload(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "refactor-1"})
+    update, context = make_update_context(
+        user_id=123,
+        chat_id=456,
+        text="/wiki refactor --preview   Rename  headings\nKeep links unchanged   ",
+        client=client,
+        args=["refactor", "--preview", "Rename", "headings", "Keep", "links"],
+    )
+    update.message.message_id = 791
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["json"] == {
+        "command": "refactor",
+        "payload": {
+            "mode": "preview",
+            "instruction": "Rename  headings\nKeep links unchanged",
+        },
+        "telegram_chat_id": 456,
+        "telegram_message_id": 791,
+        "requested_by": 123,
+    }
+    assert "preview" not in client.calls[0]["json"]["payload"]
+    assert "request" not in client.calls[0]["json"]["payload"]
+    assert update.message.replies == []
+
+
+def test_wiki_refactor_missing_preview_creates_no_job(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient()
+    update, context = make_update_context(
+        text="/wiki refactor rename headings",
+        client=client,
+        args=["refactor", "rename", "headings"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == []
+    assert update.message.replies == [bot.WIKI_REFACTOR_USAGE_MESSAGE]
+
+
+def test_wiki_refactor_blank_instruction_creates_no_job(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient()
+    update, context = make_update_context(
+        text="/wiki refactor --preview   \n ",
+        client=client,
+        args=["refactor", "--preview"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == []
+    assert update.message.replies == [bot.WIKI_REFACTOR_USAGE_MESSAGE]
+
+
+def test_wiki_refactor_apply_like_request_creates_no_job(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient()
+    update, context = make_update_context(
+        text="/wiki refactor --apply rename headings",
+        client=client,
+        args=["refactor", "--apply", "rename", "headings"],
+    )
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls == []
+    assert update.message.replies == [bot.WIKI_REFACTOR_USAGE_MESSAGE]
 
 
 def test_existing_wiki_job_commands_keep_their_payloads(

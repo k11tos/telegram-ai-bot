@@ -41,9 +41,12 @@ OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE=true
 /wiki ingest  # Process source notes already written directly in Obsidian
 /wiki update <instruction>
 /wiki lint [instruction]
+/wiki refactor --preview <instruction>
 /wiki draft <topic>
 /wiki status [job_id]
 /wiki result <job_id>
 ```
 
 New notes and edits are authored directly in the Obsidian app. The legacy `/wiki capture` command no longer creates a job; it directs users to Obsidian instead.
+
+Refactors are preview-only: `/wiki refactor` requires the literal `--preview` flag and a non-empty instruction. The bot submits the instruction as a job and does not inspect the vault or calculate the refactor itself.
