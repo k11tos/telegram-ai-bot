@@ -1690,6 +1690,46 @@ def test_wiki_ask_result_does_not_duplicate_worker_save_hint(
     assert update.message.replies[-1].lower().count("/wiki save") == 1
 
 
+def test_wiki_ask_auto_result_failed_and_expired_do_not_include_save_hint(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+    cases = [
+        (
+            "failed",
+            {"error_text": "worker timeout"},
+            "위키 작업이 실패했어요. job_id=ask-failed\n오류: worker timeout",
+        ),
+        (
+            "expired",
+            {},
+            "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요.",
+        ),
+    ]
+
+    for status, extra_payload, expected_message in cases:
+        job_id = f"ask-{status}"
+        client = FakeObsidianClient(
+            post_payload={"job_id": job_id},
+            get_payloads={
+                f"/obsidian/jobs/{job_id}": [
+                    {"job_id": job_id, "status": status, **extra_payload}
+                ]
+            },
+        )
+        update, context = make_update_context(
+            text="/wiki ask terminal?",
+            client=client,
+            args=["ask", "terminal?"],
+        )
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert update.message.replies[-1] == expected_message
+        assert "/wiki save" not in update.message.replies[-1]
+
+
 def test_wiki_ask_auto_result_send_failure_does_not_mark_notified(
     make_update_context, monkeypatch
 ):
@@ -1817,6 +1857,7 @@ def test_wiki_job_result_failed_status_includes_error_text(
         get_payloads={
             "/obsidian/jobs/job-failed": {
                 "job_id": "job-failed",
+                "command": "ask",
                 "status": "failed",
                 "error_text": "worker timeout",
             }
@@ -1844,6 +1885,7 @@ def test_wiki_job_result_expired_status_returns_retry_message(
         get_payloads={
             "/obsidian/jobs/job-expired": {
                 "job_id": "job-expired",
+                "command": "ask",
                 "status": "expired",
             }
         }
@@ -1997,6 +2039,7 @@ def test_obsidian_notification_succeeded_job_sends_rendered_answer_and_marks_not
     client = FakeObsidianClient(
         get_payload={
             "job_id": "job-100",
+            "command": "ingest",
             "status": "succeeded",
             "telegram_chat_id": 777,
             "result_text": json.dumps({"answer": "완료 답변", "references": ["A.md"]}),

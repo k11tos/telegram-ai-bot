@@ -1006,6 +1006,21 @@ def add_wiki_ask_save_hint(message: str, job_id: str) -> str:
     return f"{message}\n\n저장: /wiki save {job_id}"
 
 
+def has_successfully_available_obsidian_result(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    status = payload.get("status")
+    normalized_status = status.strip().lower() if isinstance(status, str) else ""
+    if normalized_status != "succeeded":
+        return False
+
+    result_text = payload.get("result_text")
+    if isinstance(result_text, str):
+        return bool(result_text.strip())
+    return result_text is not None and bool(str(result_text).strip())
+
+
 async def mark_obsidian_job_notified(client, job_id: str) -> bool:
     request_id = uuid.uuid4().hex[:12]
     notify_path = OBSIDIAN_JOB_NOTIFIED_PATH_TEMPLATE.format(job_id=job_id)
@@ -1086,7 +1101,11 @@ async def poll_obsidian_job_notification_once(app) -> bool:
     try:
         message = build_obsidian_job_result_message(payload)
         command = payload.get("command")
-        if isinstance(command, str) and command.strip().lower() == "ask":
+        if (
+            isinstance(command, str)
+            and command.strip().lower() == "ask"
+            and has_successfully_available_obsidian_result(payload)
+        ):
             message = add_wiki_ask_save_hint(message, job_id)
     except Exception as error:  # Defensive fallback so one malformed result does not block notification forever.
         logger.warning(
@@ -1289,9 +1308,10 @@ async def poll_wiki_ask_result(client, job_id: str) -> str | None:
             if attempt_index < timeout_seconds - 1:
                 await asyncio.sleep(min(1, max(0, deadline - loop.time())))
             continue
-        return add_wiki_ask_save_hint(
-            build_obsidian_job_result_message(payload), job_id
-        )
+        message = build_obsidian_job_result_message(payload)
+        if has_successfully_available_obsidian_result(payload):
+            message = add_wiki_ask_save_hint(message, job_id)
+        return message
 
     return None
 
@@ -1359,7 +1379,11 @@ async def wiki_job_result_command(
 
     message = build_obsidian_job_result_message(payload)
     command = payload.get("command") if isinstance(payload, dict) else None
-    if isinstance(command, str) and command.strip().lower() == "ask":
+    if (
+        isinstance(command, str)
+        and command.strip().lower() == "ask"
+        and has_successfully_available_obsidian_result(payload)
+    ):
         message = add_wiki_ask_save_hint(message, job_id)
     if not message.strip():
         message = "작업은 완료됐지만 결과 보관 기간이 지나 표시할 내용이 없어요. 다시 요청해 주세요."
