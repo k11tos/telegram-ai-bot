@@ -228,7 +228,7 @@ HELP_LINES = [
     "/session_delete <name> - 세션 삭제",
     "/sessions - 보유한 세션 목록 확인",
     "/docmode [summary|bullets|action|code] - 문서 요약 모드 확인 또는 변경",
-    "/wiki ask|save|ingest|update|lint|draft|status|result - Obsidian 위키 작업 요청",
+    "/wiki ask|save|ingest|update|lint|refactor|draft|status|result - Obsidian 위키 작업 요청",
     "/reset - 대화 기록 초기화",
     "/status - 봇 상태 확인",
     "/version - 실행 버전 정보 확인",
@@ -761,6 +761,7 @@ WIKI_HELP_MESSAGE = "\n".join(
         "/wiki ingest - Obsidian에서 직접 작성한 소스 메모 처리",
         "/wiki update <파일 경로 또는 수정 내용 설명>",
         "/wiki lint [instruction]",
+        "/wiki refactor --preview <instruction>",
         "/wiki draft <topic>",
         "/wiki status [job_id]",
         "/wiki result <job_id>",
@@ -769,6 +770,9 @@ WIKI_HELP_MESSAGE = "\n".join(
 
 WIKI_UPDATE_USAGE_MESSAGE = "사용법: /wiki update <파일 경로 또는 수정 내용 설명>"
 WIKI_SAVE_USAGE_MESSAGE = "사용법: /wiki save <ask_job_id>"
+WIKI_REFACTOR_USAGE_MESSAGE = (
+    "사용법: /wiki refactor --preview <instruction> (미리보기만 지원)"
+)
 
 WIKI_CAPTURE_REMOVED_MESSAGE = (
     "/wiki capture는 더 이상 지원하지 않습니다. 새 메모 작성이나 편집은 Obsidian 앱에서 "
@@ -948,6 +952,19 @@ def extract_wiki_lint_instruction(message_text: str | None) -> str:
         r"^\s*/wiki(?:@[A-Za-z0-9_]+)?\s+lint(?:\s|$)(.*)$",
         message_text,
         flags=re.DOTALL | re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def extract_wiki_refactor_preview_instruction(message_text: str | None) -> str:
+    """Extract refactor text only when the literal preview flag is present."""
+    if not isinstance(message_text, str):
+        return ""
+
+    match = re.match(
+        r"^\s*/(?i:wiki)(?:@[A-Za-z0-9_]+)?\s+(?i:refactor)\s+--preview(?:\s|$)(.*)$",
+        message_text,
+        flags=re.DOTALL,
     )
     return match.group(1).strip() if match else ""
 
@@ -1225,6 +1242,14 @@ async def wiki_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             getattr(update.message, "text", None)
         )
         job_payload = {"instruction": instruction} if instruction else {}
+    elif subcommand == "refactor":
+        instruction = extract_wiki_refactor_preview_instruction(
+            getattr(update.message, "text", None)
+        )
+        if not instruction:
+            await update.message.reply_text(WIKI_REFACTOR_USAGE_MESSAGE)
+            return
+        job_payload = {"mode": "preview", "instruction": instruction}
     elif subcommand == "capture":
         await update.message.reply_text(WIKI_CAPTURE_REMOVED_MESSAGE)
         return
