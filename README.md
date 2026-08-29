@@ -26,7 +26,7 @@ The bot auto-delivers completed Obsidian job results by polling ai-gateway notif
 
 ### Suppressing `/wiki` accepted messages
 
-By default the Telegram bot no longer sends an immediate “job accepted” message for `/wiki ask`, `/wiki capture`, `/wiki ingest`, or `/wiki draft`. Final results are still sent when the worker completes the job.
+By default the Telegram bot does not send an immediate “job accepted” message for `/wiki ask`, `/wiki ingest`, or `/wiki draft`. Final results are still sent when the worker completes the job.
 
 To restore the old behavior:
 
@@ -38,9 +38,10 @@ OBSIDIAN_WIKI_SEND_ACCEPTED_MESSAGE=true
 
 ```text
 /wiki ask <question>
-/wiki ingest
-/wiki capture <text>
+/wiki ingest  # Process source notes already written directly in Obsidian
 /wiki draft <topic>
 /wiki status [job_id]
 /wiki result <job_id>
 ```
+
+New notes and edits are authored directly in the Obsidian app. The legacy `/wiki capture` command no longer creates a job; it directs users to Obsidian instead.
