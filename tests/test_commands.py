@@ -1261,6 +1261,8 @@ def test_wiki_help_does_not_advertise_capture_and_describes_ingest_source_notes(
     assert "capture" not in bot.WIKI_HELP_MESSAGE
     assert "/wiki capture" not in bot.HELP_MESSAGE
     assert "Obsidian에서 직접 작성한 소스 메모 처리" in bot.WIKI_HELP_MESSAGE
+    assert "/wiki update <파일 경로 또는 수정 내용 설명>" in bot.WIKI_HELP_MESSAGE
+    assert "ask|ingest|update|draft|status|result" in bot.HELP_MESSAGE
 
 
 def test_wiki_ask_requires_question(make_update_context, monkeypatch):
@@ -1299,6 +1301,91 @@ def test_wiki_ingest_creates_ingest_job(make_update_context, monkeypatch):
     assert client.calls[0]["json"]["command"] == "ingest"
     assert client.calls[0]["json"]["payload"] == {}
     assert update.message.replies == []
+
+
+def test_wiki_update_creates_job_with_exact_raw_instruction(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    client = FakeObsidianClient(post_payload={"job_id": "update-1"})
+    update, context = make_update_context(
+        user_id=123,
+        chat_id=456,
+        text="/wiki update   Projects/계획.md의  제목을  변경해줘\n둘째 줄 유지   ",
+        client=client,
+        args=[
+            "update",
+            "Projects/계획.md의",
+            "제목을",
+            "변경해줘",
+            "둘째",
+            "줄",
+            "유지",
+        ],
+    )
+    update.message.message_id = 789
+
+    asyncio.run(bot.wiki_command(update, context))
+
+    assert client.calls[0]["path"] == bot.OBSIDIAN_JOBS_PATH
+    assert client.calls[0]["json"] == {
+        "command": "update",
+        "payload": {
+            "instruction": "Projects/계획.md의  제목을  변경해줘\n둘째 줄 유지"
+        },
+        "telegram_chat_id": 456,
+        "telegram_message_id": 789,
+        "requested_by": 123,
+    }
+    assert update.message.replies == []
+
+
+def test_wiki_update_missing_or_blank_instruction_creates_no_job(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+
+    for text, args in (
+        ("/wiki update", ["update"]),
+        ("/wiki update   \n ", ["update"]),
+    ):
+        client = FakeObsidianClient()
+        update, context = make_update_context(text=text, client=client, args=args)
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert client.calls == []
+        assert update.message.replies == [bot.WIKI_UPDATE_USAGE_MESSAGE]
+
+
+def test_existing_wiki_job_commands_keep_their_payloads(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    cases = [
+        (
+            "/wiki ask existing question",
+            ["ask", "existing", "question"],
+            "ask",
+            {"question": "existing question"},
+        ),
+        ("/wiki ingest", ["ingest"], "ingest", {}),
+        (
+            "/wiki draft existing topic",
+            ["draft", "existing", "topic"],
+            "draft",
+            {"topic": "existing topic"},
+        ),
+    ]
+
+    for text, args, command, payload in cases:
+        client = FakeObsidianClient()
+        update, context = make_update_context(text=text, client=client, args=args)
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert client.calls[0]["json"]["command"] == command
+        assert client.calls[0]["json"]["payload"] == payload
 
 
 def test_wiki_draft_creates_job_without_accepted_message_by_default(
