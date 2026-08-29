@@ -1001,9 +1001,18 @@ def build_obsidian_job_result_message(payload: object) -> str:
 
 def add_wiki_ask_save_hint(message: str, job_id: str) -> str:
     """Add Telegram save affordance without interpreting the worker result."""
-    if re.search(r"/wiki\s+save\b", message, flags=re.IGNORECASE):
+    if contains_wiki_save_command_for_job(message, job_id):
         return message
     return f"{message}\n\n저장: /wiki save {job_id}"
+
+
+def contains_wiki_save_command_for_job(message: str, job_id: str) -> bool:
+    command_pattern = (
+        r"(?:^|[\s`'\"(\[{>])(?i:/wiki[ \t]+save)[ \t]+"
+        + re.escape(job_id)
+        + r"(?=$|[\s`'\".,!?;:)\]}>])"
+    )
+    return re.search(command_pattern, message) is not None
 
 
 def has_successfully_available_obsidian_result(payload: object) -> bool:

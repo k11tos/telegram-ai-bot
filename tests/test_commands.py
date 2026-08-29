@@ -1690,6 +1690,54 @@ def test_wiki_ask_result_does_not_duplicate_worker_save_hint(
     assert update.message.replies[-1].lower().count("/wiki save") == 1
 
 
+def test_wiki_ask_result_adds_current_hint_for_other_or_bare_save_command(
+    make_update_context, monkeypatch
+):
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
+    monkeypatch.setenv("OBSIDIAN_WIKI_AUTO_RESULT_TIMEOUT_SECONDS", "1")
+    cases = [
+        "다른 답변 저장: /wiki save ask-other",
+        "명령 형식은 /wiki save 다음에 작업 ID를 붙입니다.",
+    ]
+
+    for index, worker_answer in enumerate(cases):
+        job_id = f"ask-current-{index}"
+        client = FakeObsidianClient(
+            post_payload={"job_id": job_id},
+            get_payloads={
+                f"/obsidian/jobs/{job_id}": [
+                    {
+                        "job_id": job_id,
+                        "status": "succeeded",
+                        "result_text": json.dumps({"answer": worker_answer}),
+                    }
+                ]
+            },
+        )
+        update, context = make_update_context(
+            text="/wiki ask save syntax?",
+            client=client,
+            args=["ask", "save", "syntax?"],
+        )
+
+        asyncio.run(bot.wiki_command(update, context))
+
+        assert update.message.replies[-1] == (
+            f"{worker_answer}\n\n저장: /wiki save {job_id}"
+        )
+
+
+def test_wiki_save_hint_matching_respects_exact_job_id_token_boundaries():
+    job_id = "ask-12"
+
+    assert bot.contains_wiki_save_command_for_job("/wiki save ask-12", job_id)
+    assert bot.contains_wiki_save_command_for_job("저장: /WIKI SAVE ask-12.", job_id)
+    assert bot.contains_wiki_save_command_for_job("`/wiki save ask-12`", job_id)
+    assert not bot.contains_wiki_save_command_for_job("/wiki save", job_id)
+    assert not bot.contains_wiki_save_command_for_job("/wiki save ask-123", job_id)
+    assert not bot.contains_wiki_save_command_for_job("/wiki save ask-1", job_id)
+
+
 def test_wiki_ask_auto_result_failed_and_expired_do_not_include_save_hint(
     make_update_context, monkeypatch
 ):
