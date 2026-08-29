@@ -1265,10 +1265,9 @@ def test_wiki_help_does_not_advertise_capture_and_describes_ingest_source_notes(
     assert "/wiki lint [instruction]" in bot.WIKI_HELP_MESSAGE
     assert "/wiki refactor --preview <instruction>" in bot.WIKI_HELP_MESSAGE
     assert "refactor" in bot.HELP_MESSAGE
-    assert (
-        "ask|save|ingest|update|lint|refactor|draft|status|result"
-        in bot.HELP_MESSAGE
-    )
+    assert "ask|save|ingest|update|lint|refactor|status|result" in bot.HELP_MESSAGE
+    assert "/wiki draft <topic> - (선택)" in bot.HELP_MESSAGE
+    assert "선택: ask→save와 별개" in bot.WIKI_HELP_MESSAGE
     assert "/wiki save <ask_job_id>" in bot.WIKI_HELP_MESSAGE
 
 
@@ -2071,6 +2070,23 @@ def test_wiki_job_result_failed_status_includes_error_text(
         update.message.replies[-1]
         == "위키 작업이 실패했어요. job_id=job-failed\n오류: worker timeout"
     )
+
+
+def test_wiki_job_failure_extracts_actual_cause_from_json_and_error_markers():
+    cases = [
+        ('{"error":{"message":"OpenCode model unavailable"}}', "OpenCode model unavailable"),
+        ("OPENCODE_ERROR: command exited with status 7", "command exited with status 7"),
+        ("[ERROR] missing API key", "missing API key"),
+    ]
+
+    for error_text, cause in cases:
+        message = bot.build_obsidian_job_result_message(
+            {"job_id": "failed-1", "status": "failed", "error_text": error_text}
+        )
+
+        assert message == f"위키 작업이 실패했어요. job_id=failed-1\n오류: {cause}"
+        assert "{\"error\"" not in message
+        assert "OPENCODE_ERROR" not in message
 
 
 def test_wiki_job_result_expired_status_returns_retry_message(
