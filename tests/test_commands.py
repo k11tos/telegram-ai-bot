@@ -2075,6 +2075,18 @@ def test_wiki_job_result_failed_status_includes_error_text(
 def test_wiki_job_failure_extracts_actual_cause_from_json_and_error_markers():
     cases = [
         ('{"error":{"message":"OpenCode model unavailable"}}', "OpenCode model unavailable"),
+        (
+            '{"error":"OPENCODE_ERROR","message":"command exited with status 7"}',
+            "command exited with status 7",
+        ),
+        (
+            '{"error":"OPENCODE_ERROR","detail":"model credentials unavailable"}',
+            "model credentials unavailable",
+        ),
+        (
+            '{"error":"descriptive worker failure","message":"secondary message"}',
+            "descriptive worker failure",
+        ),
         ("OPENCODE_ERROR: command exited with status 7", "command exited with status 7"),
         ("[ERROR] missing API key", "missing API key"),
     ]
@@ -2087,6 +2099,32 @@ def test_wiki_job_failure_extracts_actual_cause_from_json_and_error_markers():
         assert message == f"위키 작업이 실패했어요. job_id=failed-1\n오류: {cause}"
         assert "{\"error\"" not in message
         assert "OPENCODE_ERROR" not in message
+
+
+def test_wiki_job_failure_with_only_marker_uses_existing_safe_fallback():
+    message = bot.build_obsidian_job_result_message(
+        {
+            "job_id": "failed-marker-only",
+            "status": "failed",
+            "error_text": '{"error":"OPENCODE_ERROR"}',
+        }
+    )
+
+    assert message == "위키 작업이 실패했어요. job_id=failed-marker-only"
+
+
+def test_successful_wiki_job_rendering_is_unchanged_by_failure_normalization():
+    message = bot.build_obsidian_job_result_message(
+        {
+            "job_id": "success-1",
+            "status": "succeeded",
+            "result_text": json.dumps(
+                {"answer": "완료 답변", "references": ["Notes/Source.md"]}
+            ),
+        }
+    )
+
+    assert message == "완료 답변\n\n참고:\n- Notes/Source.md"
 
 
 def test_wiki_job_result_expired_status_returns_retry_message(

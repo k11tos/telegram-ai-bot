@@ -1048,14 +1048,17 @@ def extract_failed_job_cause(value: object) -> str:
     except json.JSONDecodeError:
         decoded = None
     if decoded is not None and decoded != value:
-        decoded_cause = extract_failed_job_cause(decoded)
-        if decoded_cause:
-            return decoded_cause
+        return extract_failed_job_cause(decoded)
 
     # Worker/CLI adapters sometimes wrap a cause in an error marker. Telegram
     # should show the cause, not leak that transport marker into user-facing UX.
+    marker_pattern = (
+        r"(?:\[|<|__)?(?:opencode[-_ ]?)?(?:marker[-_ ]?)?error(?:\]|>|__)?"
+    )
+    if re.fullmatch(marker_pattern, text, flags=re.IGNORECASE):
+        return ""
     marker = re.match(
-        r"^(?:\[|<|__)?(?:opencode[-_ ]?)?(?:marker[-_ ]?)?error(?:\]|>|__)?(?:\s*[:=-]\s*|\s+)(.+)$",
+        rf"^{marker_pattern}(?:\s*[:=-]\s*|\s+)(.+)$",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
