@@ -1,2 +1,2 @@
 -r requirements.txt
-pytest-asyncio==1.4.1
+pytest-asyncio==1.4.1.post1
