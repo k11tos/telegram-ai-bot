@@ -1,0 +1,14 @@
+# Opt-in candidate only. Review docs/systemd-watchdog.md before installing.
+# Never installed by scripts/deploy.sh or GitHub Actions.
+# Preserve the existing unit Type, ExecStart and runtime metadata drop-in.
+[Unit]
+StartLimitIntervalSec=15min
+StartLimitBurst=3
+
+[Service]
+WatchdogSec=180s
+NotifyAccess=main
+# If the existing policy is compatible (e.g. always), retain it after review
+# by omitting this line from the operator's staged copy.
+Restart=on-failure
+RestartSec=30s
