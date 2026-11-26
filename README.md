@@ -93,8 +93,10 @@ Ordinary CLI runs and deployments leave the watchdog disabled. This change insta
 no systemd configuration and sends no readiness notification. A valid inherited
 `NOTIFY_SOCKET` plus positive `WATCHDOG_USEC`, and matching `WATCHDOG_PID` if set,
 opt into `WATCHDOG=1`. Filesystem and Linux abstract sockets are supported.
-Do not set these variables manually for ordinary use. Step 4 supplies the separate
-reviewed opt-in unit/runbook; it must preserve existing Type/ExecStart/runtime metadata.
+Do not set these variables manually for ordinary use. For the separate opt-in
+configuration, preflight, manual activation, disposable checks and rollback, see
+the [Step 4 systemd runbook](docs/systemd-watchdog.md). It preserves existing
+Type/ExecStart/runtime metadata; ordinary CI/deploy never installs the example.
 
 The existing PTB 22.8 updater calls a public `ExtBot.get_updates` override. It delegates
 to PTB unchanged, observing the actual result/error (including empty successful polls).
