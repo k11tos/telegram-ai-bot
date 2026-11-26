@@ -1241,9 +1241,9 @@ def test_wiki_disallowed_user_is_rejected(make_update_context, monkeypatch, capl
     assert client.calls == []
     assert update.message.replies[-1] == bot.build_wiki_denied_message(123)
     assert "wiki_permission_denied" in caplog.text
-    assert "user_id=123" in caplog.text
-    assert "chat_id=456" in caplog.text
-    assert "allowlist_empty=False" in caplog.text
+    assert "user_id=123" not in caplog.text
+    assert "chat_id=456" not in caplog.text
+    assert "allowlist_empty=False" not in caplog.text
 
 
 def test_wiki_missing_subcommand_shows_help(make_update_context, monkeypatch):

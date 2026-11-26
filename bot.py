@@ -19,6 +19,9 @@ from telegram.ext import (
     filters,
 )
 
+from polling_watchdog import NotifyConfig, PollWatchdog, ProgressBot
+from safe_logging import configure_safe_logging
+
 from commands.ops import (
     OperationalCommandDependencies,
     configure_operational_dependencies,
@@ -123,6 +126,7 @@ HTTP_TIMEOUT_CONFIG = resolve_http_timeout_config()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+configure_safe_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -2362,11 +2366,17 @@ def main():
     if not AI_GATEWAY_BASE_URL:
         raise ValueError("AI_GATEWAY_BASE_URL이 설정되지 않았습니다.")
 
+    configure_safe_logging()
     load_bot_state()
 
+    config = NotifyConfig.from_env()
+    builder = ApplicationBuilder()
+    if config is not None:
+        builder = builder.bot(ProgressBot(BOT_TOKEN, PollWatchdog(config)))
+    else:
+        builder = builder.token(BOT_TOKEN)
     app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
+        builder
         .post_init(init_http_client)
         .post_shutdown(close_http_client)
         .build()
@@ -2391,4 +2401,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logger.error("bot_startup_or_runtime_failed")
+        raise SystemExit(1) from None
