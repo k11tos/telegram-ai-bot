@@ -81,3 +81,88 @@ Command payloads are exactly:
 New notes and edits are authored directly in the Obsidian app. The legacy `/wiki capture` command is unsupported and creates no job; it only directs users to Obsidian. Apply-mode refactors are also unsupported and create no job.
 
 Refactors are preview-only: `/wiki refactor` requires the literal `--preview` flag and a non-empty instruction. `lint` and refactor preview are read-only worker operations. The bot submits requests and displays results; it does not inspect or mutate the vault, run OpenCode, calculate diffs, or decide which vault files a write command may change.
+
+## Opt-in polling watchdog (systemd)
+
+Related: [home_service issue #22, Step 3](https://github.com/k11tos/home_service/issues/22#issuecomment-7191477867).
+Prerequisites merged: home_service [#37](https://github.com/k11tos/home_service/pull/37)
+and [#38](https://github.com/k11tos/home_service/pull/38).
+
+The watchdog implementation requires Python 3.11+ (matching PR CI).
+Ordinary CLI runs and deployments leave the watchdog disabled. This change installs
+no systemd configuration and sends no readiness notification. A valid inherited
+`NOTIFY_SOCKET` plus positive `WATCHDOG_USEC`, and matching `WATCHDOG_PID` if set,
+opt into `WATCHDOG=1`. Filesystem and Linux abstract sockets are supported.
+Do not set these variables manually for ordinary use. Step 4 supplies the separate
+reviewed opt-in unit/runbook; it must preserve existing Type/ExecStart/runtime metadata.
+
+The existing PTB 22.8 updater calls a public `ExtBot.get_updates` override. It delegates
+to PTB unchanged, observing the actual result/error (including empty successful polls).
+It does not consume updates separately or patch PTB internals. Existing `run_polling`,
+post-init HTTP client/Obsidian startup and post-shutdown cleanup remain in place.
+Outside a valid watchdog environment the original bot builder is used.
+
+The small monotonic state machine reports initializing, healthy, degraded, stalled,
+unknown or stopping. No signals are sent until a poll completes successfully or
+with a recognized retryable Telegram error. Completed transport timeouts retry
+immediately; other Telegram errors allow PTB's maximum 30s backoff; `RetryAfter`
+allows the server wait plus PTB's 0.5s slack. A successful poll allows 5s scheduling
+slack before the next attempt. An old success alone never causes recovery during
+continuing external errors. The notifier runs on the application loop every one
+third of the systemd interval, with nonblocking Unix datagrams and no worker thread.
+Cancellation/invalid token/local unexpected errors stop notifications. Task creation
+is lazy and idempotent; bot shutdown cancels and awaits it, and cleanup polls cannot
+reactivate stopped notifications.
+
+### Configuration and classification limits
+
+The integrated path retains PTB's default 10s long poll, zero poll interval and
+HTTPXRequest defaults (5s connect/read/write and 1s pool). An additional overall
+attempt cap of long-poll timeout + 46s (56s normally) bounds slow trickle responses
+and local parsing. The progress deadline includes another 5s jitter allowance.
+Hitting the overall cap is ambiguous, classified **unknown**, and latches signals
+off until process restart even if PTB subsequently retries. Ordinary HTTPX/PTB
+`TimedOut` errors remain degraded and continue signaling. An external peer that
+exceeds the overall cap can therefore cause bounded recovery; it is not proof of a
+local deadlock. Similarly, no new attempt after a known wait is **stalled**, but
+this public extension cannot observe the updater's actual sleep or queue internals.
+A loop wakeup delayed by at least half the watchdog interval latches signals off,
+so a resumed loop cannot simply revive an expired watchdog.
+
+Before activation, verify the deployed PTB version/default timeout/retry behavior,
+startup (including gateway preset loading and Telegram bootstrap), actual systemd
+version, restart policy and start limits. The watchdog interval must comfortably
+exceed startup, the 56s attempt cap plus 5s jitter, notifier cadence and scheduling
+jitter; notifier cadence alone being less than half the interval is insufficient.
+Very small intervals are unsupported operationally even when syntactically valid.
+Changed polling intervals/custom transport timeouts require reviewing this budget.
+Long server-requested waits are conservatively treated as known degraded waits;
+their completion cannot be proven until the next poll begins.
+
+This covers polling and loop progress only. A live async handler, AI gateway or
+other downstream request can still fail or hang independently. Telegram/Pi/network
+outages can also prevent alerts. No end-to-end reply or alert-path guarantee is made.
+No Pi/systemd activation, restart, real API test or fault injection is part of this PR.
+
+Console logging now uses an allowlist of literal event names and fixed severity:
+arguments, IDs, URLs, free-form messages and tracebacks are omitted for application
+and library logs. Unknown events become `runtime_event`; this deliberately reduces
+diagnostic detail. Top-level runtime failures use a fixed event and exit 1.
+Deployment smoke failures omit raw journals. This is an output-format boundary for
+standard logging handlers; code must not add direct prints of sensitive data or
+new handlers bypassing the formatter.
+
+Offline validation: `python -m pytest -q`, `bash -n scripts/deploy.sh`, and
+`python -m py_compile bot.py polling_watchdog.py safe_logging.py`. Tests use fake
+clocks, sockets and requests, including real PTB response/error parsing with an
+in-memory request. They do not contact a daemon, Telegram or an AI gateway.
+Rollback: revert the Step 3 application commit while watchdog remains disabled.
+If a future operator has enabled WatchdogSec, disable the separate opt-in drop-in
+first using the Step 4 rollback runbook before reverting to a non-notifying build.
+
+Public extension/source references checked against the installed pinned PTB 22.8:
+[ExtBot](https://docs.python-telegram-bot.org/en/v22.8/telegram.ext.extbot.html),
+[ApplicationBuilder.bot](https://docs.python-telegram-bot.org/en/v22.8/telegram.ext.applicationbuilder.html#telegram.ext.ApplicationBuilder.bot),
+[Bot.get_updates](https://docs.python-telegram-bot.org/en/v22.8/telegram.bot.html#telegram.Bot.get_updates),
+and [22.8 retry-loop source](https://github.com/python-telegram-bot/python-telegram-bot/blob/v22.8/telegram/ext/_utils/networkloop.py).
+No private PTB member is read or modified by the integration.

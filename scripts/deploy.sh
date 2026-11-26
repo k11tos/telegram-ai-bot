@@ -113,8 +113,7 @@ fi
 log "Running post-restart smoke check (systemctl is-active)"
 if ! sudo systemctl is-active --quiet "$SERVICE_NAME"; then
   echo "Error: service '$SERVICE_NAME' is not active after restart." >&2
-  log "Recent journal logs for $SERVICE_NAME:"
-  sudo journalctl -u "$SERVICE_NAME" -n 60 --no-pager
+  log "Service inactive; raw journal output omitted for privacy."
   exit 1
 fi
 
